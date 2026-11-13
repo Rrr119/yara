@@ -30,6 +30,10 @@ MODULE(macho)
 MODULE(dex)
 #endif
 
+#ifdef ZIP_MODULE
+MODULE(zip)
+#endif
+
 #ifdef PB_TESTS_MODULE
 MODULE(pb_tests)
 #endif

@@ -22,6 +22,7 @@ m4_ifdef([AM_PROG_AR], [AM_PROG_AR])
 AC_PROG_CC
 AM_PROG_LEX
 AC_PROG_YACC
+AC_PATH_PROGS([PYTHON], [python3 python])
 
 # If the C compiler supports the keyword inline, do nothing. Otherwise define
 # inline to __inline__ or __inline if it accepts one of those, otherwise define
@@ -191,6 +192,18 @@ AC_ARG_ENABLE([dex],
   [if test x$enableval = xyes; then
     build_dex_module=true
     CFLAGS="$CFLAGS -DDEX_MODULE"
+  fi])
+
+AC_ARG_ENABLE([zip],
+  [AS_HELP_STRING([--enable-zip], [enable zip module])],
+  [if test x$enableval = xyes; then
+    build_zip_module=true
+    AC_CHECK_HEADERS([zlib.h],,
+      AC_MSG_ERROR([please install zlib]))
+    AC_CHECK_LIB(z, inflate,,
+      AC_MSG_ERROR([please install zlib]))
+    CFLAGS="$CFLAGS -DZIP_MODULE"
+    PC_LIBS_PRIVATE="$PC_LIBS_PRIVATE -lz"
   fi])
 
 AC_ARG_ENABLE([debug-dex],
@@ -376,6 +389,7 @@ AS_IF([test "x$have_crypto" = "xno"],
 
 
 AM_CONDITIONAL([GCC], [test "x$GCC" = xyes])
+AM_CONDITIONAL([HAVE_PYTHON], [test "x$PYTHON" != "x" && test "x$PYTHON" != "xno"])
 AM_CONDITIONAL([PROTOC], [test "x${PROTOC}" != "x"])
 AM_CONDITIONAL([DEBUG], [test x$debug = xtrue])
 AM_CONDITIONAL([GCOV], [test x$gcov = xtrue])
@@ -392,6 +406,7 @@ AM_CONDITIONAL([DOTNET_MODULE], [test x$build_dotnet_module = xtrue])
 AM_CONDITIONAL([MACHO_MODULE], [test x$build_macho_module = xtrue])
 AM_CONDITIONAL([PB_TESTS_MODULE], [test x$build_pb_tests_module = xtrue])
 AM_CONDITIONAL([DEX_MODULE], [test x$build_dex_module = xtrue])
+AM_CONDITIONAL([ZIP_MODULE], [test x$build_zip_module = xtrue])
 AM_CONDITIONAL([DEBUG_DEX_MODULE], [test x$debug_dex_module = xtrue])
 
 AM_CONDITIONAL([USE_WINDOWS_PROC], [test x$proc_interface = xwindows ])

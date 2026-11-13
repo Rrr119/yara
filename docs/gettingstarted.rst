@@ -48,6 +48,7 @@ The following modules are not compiled into YARA by default:
 
 * cuckoo
 * magic
+* zip
 
 If you plan to use them you must pass the corresponding ``--enable-<module
 name>`` arguments to the ``configure`` script.
@@ -56,6 +57,7 @@ For example::
 
     ./configure --enable-cuckoo
     ./configure --enable-magic
+    ./configure --enable-zip
     ./configure --enable-cuckoo --enable-magic
 
 Modules usually depend on external libraries, depending on the modules you
@@ -75,6 +77,10 @@ choose to install you'll need the following libraries:
         Ubuntu, Debian and CentOS include a package
         ``libmagic-dev``. The source code can be found
         `here <ftp://ftp.astron.com/pub/file/>`_.
+
+* zip:
+        Depends on zlib. Ubuntu and Debian users can install the
+        ``zlib1g-dev`` package.
 
 Installing with vcpkg
 ---------------------

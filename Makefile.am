@@ -122,6 +122,10 @@ if DEX_MODULE
 MODULES += libyara/modules/dex/dex.c
 endif
 
+if ZIP_MODULE
+MODULES += libyara/modules/zip/zip.c
+endif
+
 if PB_TESTS_MODULE
 MODULES += libyara/modules/pb_tests/pb_tests.c
 MODULES += libyara/modules/pb_tests/pb_tests.pb-c.c
@@ -405,6 +409,13 @@ test_dex_LDADD = libyara.la
 test_dex_LDFLAGS = -static
 endif
 
+if ZIP_MODULE
+if HAVE_PYTHON
+check-local:
+	$(PYTHON) $(srcdir)/tests/test-zip.py --yara $(builddir)/yara
+endif
+endif
+
 if DOTNET_MODULE
 check_PROGRAMS+=test-dotnet
 test_dotnet_SOURCES = tests/test-dotnet.c tests/util.c
@@ -429,4 +440,4 @@ endif
 # man pages
 man1_MANS = yara.man yarac.man
 
-EXTRA_DIST = $(man1_MANS) README.md bootstrap.sh
+EXTRA_DIST = $(man1_MANS) README.md bootstrap.sh tests/test-zip.py
