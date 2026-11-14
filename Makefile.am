@@ -234,6 +234,7 @@ libyara_la_SOURCES = \
 	libyara/parser.c \
 	libyara/proc.c \
 	libyara/re.c \
+	libyara/re_dfa.c \
 	libyara/re_grammar.y \
 	libyara/re_lexer.l \
 	libyara/rules.c \
@@ -346,6 +347,17 @@ test_stack_LDFLAGS = -static
 test_re_split_SOURCES = tests/test-re-split.c tests/util.c
 test_re_split_LDADD = libyara.la
 test_re_split_LDFLAGS = -static
+
+test_re_dfa_SOURCES = tests/test-re-dfa.c tests/util.c
+test_re_dfa_LDADD = libyara.la
+test_re_dfa_LDFLAGS = -static
+
+# Throughput benchmark for the DFA vs fiber regexp engines. Built on demand
+# with "make bench-re-dfa" but intentionally excluded from check_PROGRAMS.
+noinst_PROGRAMS = bench-re-dfa
+bench_re_dfa_SOURCES = tests/bench-re-dfa.c
+bench_re_dfa_LDADD = libyara.la
+bench_re_dfa_LDFLAGS = -static
 test_async_SOURCES = tests/test-async.c tests/util.c
 test_async_LDADD = libyara.la
 test_async_LDFLAGS = -static
@@ -372,6 +384,7 @@ check_PROGRAMS = \
   test-math \
   test-stack \
   test-re-split \
+  test-re-dfa \
   test-async \
   test-iterators \
   test-exec \

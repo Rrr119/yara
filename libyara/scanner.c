@@ -36,6 +36,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <yara/mem.h>
 #include <yara/object.h>
 #include <yara/proc.h>
+#include <yara/re_dfa.h>
 #include <yara/scanner.h>
 #include <yara/strutils.h>
 #include <yara/types.h>
@@ -354,6 +355,8 @@ YR_API void yr_scanner_destroy(YR_SCANNER* scanner)
     yr_free(position);
     position = next;
   }
+
+  yr_re_dfa_cache_destroy(scanner);
 
   if (scanner->objects_table != NULL)
   {

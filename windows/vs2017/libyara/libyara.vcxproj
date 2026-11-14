@@ -261,6 +261,7 @@
     <ClCompile Include="..\..\..\libyara\proc.c" />
     <ClCompile Include="..\..\..\libyara\proc\windows.c" />
     <ClCompile Include="..\..\..\libyara\re.c" />
+    <ClCompile Include="..\..\..\libyara\re_dfa.c" />
     <ClCompile Include="..\..\..\libyara\re_grammar.c" />
     <ClCompile Include="..\..\..\libyara\re_lexer.c" />
     <ClCompile Include="..\..\..\libyara\rules.c" />

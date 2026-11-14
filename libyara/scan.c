@@ -37,6 +37,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <yara/libyara.h>
 #include <yara/limits.h>
 #include <yara/re.h>
+#include <yara/re_dfa.h>
 #include <yara/rules.h>
 #include <yara/scan.h>
 #include <yara/stopwatch.h>
@@ -799,6 +800,89 @@ typedef int (*RE_EXEC_FUNC)(
     void* callback_args,
     int* matches);
 
+// Emits a console-log message through the scan callback. The console module
+// uses the same mechanism, so user code already knows how to surface these
+// messages.
+static void _yr_scan_dfa_warning(
+    YR_SCAN_CONTEXT* context,
+    const uint8_t* code,
+    const char* reason)
+{
+  if (context->callback == NULL)
+    return;
+
+  if (!yr_re_dfa_mark_fallback_notified(context, code))
+    return;
+
+  char message[128];
+
+  snprintf(
+      message,
+      sizeof(message),
+      "DFA regexp engine unavailable (%s), using default engine",
+      reason);
+
+  context->callback(
+      context,
+      CALLBACK_MSG_CONSOLE_LOG,
+      (void*) message,
+      context->user_data);
+}
+
+// Runs a regular expression with the DFA engine when it is enabled and able
+// to handle the bytecode. On any DFA limitation it transparently retries with
+// the original fiber-based engine after notifying the caller.
+static int _yr_scan_re_exec(
+    YR_SCAN_CONTEXT* context,
+    const uint8_t* code,
+    const uint8_t* input,
+    size_t input_forwards_size,
+    size_t input_backwards_size,
+    int flags,
+    RE_MATCH_CALLBACK_FUNC callback,
+    void* callback_args,
+    int* matches,
+    RE_EXEC_FUNC fallback_exec)
+{
+  uint32_t dfa_enabled = 0;
+
+  yr_get_configuration_uint32(YR_CONFIG_DFA_REGEXP, &dfa_enabled);
+
+  if (dfa_enabled != 0)
+  {
+    YR_RE_DFA_RESULT dfa_result = yr_re_dfa_exec(
+        context,
+        code,
+        input,
+        input_forwards_size,
+        input_backwards_size,
+        flags,
+        callback,
+        callback_args,
+        matches);
+
+    if (dfa_result == YR_RE_DFA_OK)
+      return ERROR_SUCCESS;
+
+    _yr_scan_dfa_warning(
+        context,
+        code,
+        dfa_result == YR_RE_DFA_FALLBACK ? "unsupported construct"
+                                         : "resource limit reached");
+  }
+
+  return fallback_exec(
+      context,
+      code,
+      input,
+      input_forwards_size,
+      input_backwards_size,
+      flags,
+      callback,
+      callback_args,
+      matches);
+}
+
 static int _yr_scan_verify_re_match(
     YR_SCAN_CONTEXT* context,
     YR_AC_MATCH* ac_match,
@@ -853,7 +937,7 @@ static int _yr_scan_verify_re_match(
       STRING_IS_BASE64(ac_match->string) ||
       STRING_IS_BASE64_WIDE(ac_match->string))
   {
-    FAIL_ON_ERROR(exec(
+    FAIL_ON_ERROR(_yr_scan_re_exec(
         context,
         ac_match->forward_code,
         data + offset,
@@ -862,11 +946,12 @@ static int _yr_scan_verify_re_match(
         flags,
         NULL,
         NULL,
-        &callback_args.forward_matches));
+        &callback_args.forward_matches,
+        exec));
 
     if (callback_args.forward_matches != -1 && ac_match->backward_code != NULL)
     {
-      FAIL_ON_ERROR(exec(
+      FAIL_ON_ERROR(_yr_scan_re_exec(
           context,
           ac_match->backward_code,
           data + offset,
@@ -875,7 +960,8 @@ static int _yr_scan_verify_re_match(
           flags | RE_FLAGS_BACKWARDS | RE_FLAGS_EXHAUSTIVE,
           _yr_scan_match_callback,
           (void*) &callback_args,
-          NULL));
+          NULL,
+          exec));
     }
     else if (callback_args.forward_matches >= 0)
     {
@@ -886,7 +972,7 @@ static int _yr_scan_verify_re_match(
 
   if (STRING_IS_WIDE(ac_match->string))
   {
-    FAIL_ON_ERROR(exec(
+    FAIL_ON_ERROR(_yr_scan_re_exec(
         context,
         ac_match->forward_code,
         data + offset,
@@ -895,11 +981,12 @@ static int _yr_scan_verify_re_match(
         flags | RE_FLAGS_WIDE,
         NULL,
         NULL,
-        &callback_args.forward_matches));
+        &callback_args.forward_matches,
+        exec));
 
     if (callback_args.forward_matches != -1 && ac_match->backward_code != NULL)
     {
-      FAIL_ON_ERROR(exec(
+      FAIL_ON_ERROR(_yr_scan_re_exec(
           context,
           ac_match->backward_code,
           data + offset,
@@ -908,7 +995,8 @@ static int _yr_scan_verify_re_match(
           flags | RE_FLAGS_WIDE | RE_FLAGS_BACKWARDS | RE_FLAGS_EXHAUSTIVE,
           _yr_scan_match_callback,
           (void*) &callback_args,
-          NULL));
+          NULL,
+          exec));
     }
     else if (callback_args.forward_matches >= 0)
     {

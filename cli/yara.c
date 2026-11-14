@@ -151,6 +151,7 @@ static bool show_version = false;
 static bool show_help = false;
 static bool ignore_warnings = false;
 static bool fast_scan = false;
+static bool dfa_regexp = false;
 static bool negate = false;
 static bool print_count_only = false;
 static bool strict_escape = false;
@@ -216,6 +217,12 @@ args_option_t options[] = {
         _T("fail on warnings")),
 
     OPT_BOOLEAN('f', _T("fast-scan"), &fast_scan, _T("fast matching mode")),
+
+    OPT_BOOLEAN(
+        0,
+        _T("dfa-regexp"),
+        &dfa_regexp,
+        _T("use the DFA regexp engine (falls back per-rule when unsupported)")),
 
     OPT_BOOLEAN('h', _T("help"), &show_help, _T("show this help and exit")),
 
@@ -1511,6 +1518,10 @@ int _tmain(int argc, const char_t** argv)
   }
 
   yr_set_configuration_uint32(YR_CONFIG_STACK_SIZE, (uint32_t) stack_size);
+
+  yr_set_configuration_uint32(
+      YR_CONFIG_DFA_REGEXP,
+      dfa_regexp ? 1u : 0u);
 
   yr_set_configuration_uint32(
       YR_CONFIG_MAX_STRINGS_PER_RULE, (uint32_t) max_strings_per_rule);

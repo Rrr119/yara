@@ -312,6 +312,12 @@ YR_API int yr_initialize(void)
   FAIL_ON_ERROR(
       yr_set_configuration(YR_CONFIG_MAX_MATCH_DATA, &def_max_match_data));
 
+  // The DFA regexp engine is opt-in: zero keeps the default engine.
+  uint32_t def_dfa_regexp = 0;
+
+  FAIL_ON_ERROR(
+      yr_set_configuration(YR_CONFIG_DFA_REGEXP, &def_dfa_regexp));
+
   YR_DEBUG_FPRINTF(2, stderr, "} // %s()\n", __FUNCTION__);
 
   return ERROR_SUCCESS;
@@ -402,6 +408,7 @@ YR_API int yr_set_configuration(YR_CONFIG_NAME name, void *src)
   case YR_CONFIG_STACK_SIZE:
   case YR_CONFIG_MAX_STRINGS_PER_RULE:
   case YR_CONFIG_MAX_MATCH_DATA:
+  case YR_CONFIG_DFA_REGEXP:
     yr_cfgs[name].ui32 = *(uint32_t *) src;
     break;
 
@@ -436,6 +443,7 @@ YR_API int yr_set_configuration_uint32(YR_CONFIG_NAME name, uint32_t value)
   case YR_CONFIG_STACK_SIZE:
   case YR_CONFIG_MAX_STRINGS_PER_RULE:
   case YR_CONFIG_MAX_MATCH_DATA:
+  case YR_CONFIG_DFA_REGEXP:
     return yr_set_configuration(name, &value);
   default:
     return ERROR_INVALID_ARGUMENT;
@@ -492,6 +500,7 @@ YR_API int yr_get_configuration(YR_CONFIG_NAME name, void *dest)
   case YR_CONFIG_STACK_SIZE:
   case YR_CONFIG_MAX_STRINGS_PER_RULE:
   case YR_CONFIG_MAX_MATCH_DATA:
+  case YR_CONFIG_DFA_REGEXP:
     *(uint32_t *) dest = yr_cfgs[name].ui32;
     break;
 
@@ -526,6 +535,7 @@ YR_API int yr_get_configuration_uint32(YR_CONFIG_NAME name, uint32_t *dest)
   case YR_CONFIG_STACK_SIZE:
   case YR_CONFIG_MAX_STRINGS_PER_RULE:
   case YR_CONFIG_MAX_MATCH_DATA:
+  case YR_CONFIG_DFA_REGEXP:
     return yr_get_configuration(name, (void *) dest);
   default:
     return ERROR_INVALID_ARGUMENT;

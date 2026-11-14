@@ -162,6 +162,20 @@ typedef struct RE_FIBER_POOL RE_FIBER_POOL;
 typedef struct RE_FAST_EXEC_POSITION RE_FAST_EXEC_POSITION;
 typedef struct RE_FAST_EXEC_POSITION_LIST RE_FAST_EXEC_POSITION_LIST;
 typedef struct RE_FAST_EXEC_POSITION_POOL RE_FAST_EXEC_POSITION_POOL;
+typedef struct YR_RE_DFA YR_RE_DFA;
+
+// Per-scanner cache of compiled DFA regexps, defined fully here so that
+// YR_SCAN_CONTEXT can embed it without a circular include of re_dfa.h.
+struct YR_RE_DFA_CACHE
+{
+  YR_RE_DFA* head;
+
+  // Bytecode pointers for which a DFA fallback warning was already emitted
+  // during this scan, keeping the message to once per regular expression.
+  const uint8_t* notified[64];
+  int num_notified;
+};
+typedef struct YR_RE_DFA_CACHE YR_RE_DFA_CACHE;
 
 typedef struct YR_AC_STATE YR_AC_STATE;
 typedef struct YR_AC_AUTOMATON YR_AC_AUTOMATON;
@@ -804,6 +818,10 @@ struct YR_SCAN_CONTEXT
 
   // Pool used by yr_re_fast_exec.
   RE_FAST_EXEC_POSITION_POOL re_fast_exec_position_pool;
+
+  // Cache of lazily-constructed DFAs used by the optional DFA regexp engine.
+  // Empty unless YR_CONFIG_DFA_REGEXP is enabled.
+  YR_RE_DFA_CACHE re_dfa_cache;
 
   // A bitmap with one bit per rule, bit N is set when the rule with index N
   // has matched.
