@@ -278,7 +278,25 @@ endif
 pkgconfigdir = $(libdir)/pkgconfig
 nodist_pkgconfig_DATA = yara.pc
 
-bin_PROGRAMS = yara yarac
+bin_PROGRAMS = yara yarac yara-perf
+
+#
+# yara-perf needs the scanner instrumented with YR_PROFILING_ENABLED. Build a
+# small convenience library with only the scanner-related translation units
+# compiled with that flag. The normal libyara (and therefore the yara and yarac
+# binaries) keeps its default instrumentation-free build.
+#
+noinst_LTLIBRARIES = libyara-perf.la
+
+libyara_perf_la_SOURCES = \
+  libyara/exec.c \
+  libyara/scan.c \
+  libyara/scanner.c
+
+libyara_perf_la_CFLAGS = \
+  $(AM_CFLAGS) \
+  -DYR_PROFILING_ENABLED \
+  -I$(srcdir)/libyara
 
 yara_SOURCES = \
   cli/args.c \
@@ -300,6 +318,16 @@ yarac_SOURCES = \
    cli/yarac.c
 
 yarac_LDADD = libyara.la
+
+yara_perf_SOURCES = \
+  cli/args.c \
+  cli/args.h \
+  cli/common.c \
+  cli/common.h \
+  cli/yara-perf.c
+
+yara_perf_LDADD = libyara-perf.la libyara.la
+yara_perf_LDFLAGS = -static
 
 tests_mapper_SOURCES = tests/mapper.c
 tests_mapper_CFLAGS = -O0
@@ -358,6 +386,10 @@ test_exec_LDFLAGS = -static
 
 TESTS = $(check_PROGRAMS)
 TESTS_ENVIRONMENT = TOP_SRCDIR=$(top_srcdir) TOP_BUILDDIR=$(top_builddir)
+
+if POSIX
+TESTS += tests/test-perf.sh
+endif
 
 check_PROGRAMS = \
   test-arena \
@@ -429,4 +461,10 @@ endif
 # man pages
 man1_MANS = yara.man yarac.man
 
-EXTRA_DIST = $(man1_MANS) README.md bootstrap.sh
+EXTRA_DIST = \
+  $(man1_MANS) \
+  README.md \
+  bootstrap.sh \
+  cli/unicode.h \
+  tests/data/perf.yar \
+  tests/test-perf.sh

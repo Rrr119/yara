@@ -1085,12 +1085,21 @@ int yr_scan_verify_match(
     return ERROR_SUCCESS;
 
 #ifdef YR_PROFILING_ENABLED
-  uint64_t start_time;
-  bool sample = context->profiling_info[string->rule_idx].atom_matches %
+  YR_PROFILING_INFO* rule_profiling_info =
+      &context->profiling_info[string->rule_idx];
+
+  YR_STRING_PROFILING_INFO* string_profiling_info =
+      context->string_profiling_info != NULL
+          ? &context->string_profiling_info[string->idx]
+          : NULL;
+
+  uint64_t start_time = 0;
+  bool sample = rule_profiling_info->atom_matches %
                     YR_MATCH_VERIFICATION_PROFILING_RATE ==
                 0;
+  bool string_sample = string_profiling_info != NULL;
 
-  if (sample)
+  if (sample || string_sample)
     start_time = yr_stopwatch_elapsed_ns(&context->stopwatch);
 #endif
 
@@ -1131,13 +1140,28 @@ int yr_scan_verify_match(
   }
 
 #ifdef YR_PROFILING_ENABLED
-  if (sample)
+  if (sample || string_sample)
   {
     uint64_t finish_time = yr_stopwatch_elapsed_ns(&context->stopwatch);
-    context->profiling_info[string->rule_idx].match_time +=
-        (finish_time - start_time);
+    uint64_t elapsed_time = finish_time - start_time;
+
+    if (sample)
+    {
+      rule_profiling_info->match_time += elapsed_time;
+      rule_profiling_info->match_samples++;
+    }
+
+    if (string_sample)
+    {
+      string_profiling_info->match_time += elapsed_time;
+      string_profiling_info->match_samples++;
+    }
   }
-  context->profiling_info[string->rule_idx].atom_matches++;
+
+  rule_profiling_info->atom_matches++;
+
+  if (string_profiling_info != NULL)
+    string_profiling_info->atom_matches++;
 #endif
 
   if (result != ERROR_SUCCESS)

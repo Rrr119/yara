@@ -300,8 +300,18 @@ YR_API int yr_scanner_create(YR_RULES* rules, YR_SCANNER** scanner)
     yr_scanner_destroy(new_scanner);
     return ERROR_INSUFFICIENT_MEMORY;
   }
+
+  new_scanner->string_profiling_info = yr_calloc(
+      rules->num_strings, sizeof(YR_STRING_PROFILING_INFO));
+
+  if (new_scanner->string_profiling_info == NULL && rules->num_strings > 0)
+  {
+    yr_scanner_destroy(new_scanner);
+    return ERROR_INSUFFICIENT_MEMORY;
+  }
 #else
   new_scanner->profiling_info = NULL;
+  new_scanner->string_profiling_info = NULL;
 #endif
 
   external = rules->ext_vars_table;
@@ -364,6 +374,7 @@ YR_API void yr_scanner_destroy(YR_SCANNER* scanner)
 
 #ifdef YR_PROFILING_ENABLED
   yr_free(scanner->profiling_info);
+  yr_free(scanner->string_profiling_info);
 #endif
 
   yr_free(scanner->rule_matches_flags);
@@ -860,9 +871,11 @@ YR_API YR_RULE_PROFILING_INFO* yr_scanner_get_profiling_info(
     profiling_info[i].rule = &scanner->rules->rules_table[i];
 #ifdef YR_PROFILING_ENABLED
     profiling_info[i].cost = scanner->profiling_info[i].exec_time +
-                             (scanner->profiling_info[i].atom_matches *
-                              scanner->profiling_info[i].match_time) /
-                                 YR_MATCH_VERIFICATION_PROFILING_RATE;
+                             (scanner->profiling_info[i].match_samples > 0
+                                  ? (scanner->profiling_info[i].atom_matches *
+                                     scanner->profiling_info[i].match_time) /
+                                        scanner->profiling_info[i].match_samples
+                                  : 0);
 #else
     memset(&profiling_info[i], 0, sizeof(YR_RULE_PROFILING_INFO));
 #endif
@@ -880,6 +893,41 @@ YR_API YR_RULE_PROFILING_INFO* yr_scanner_get_profiling_info(
   return profiling_info;
 }
 
+//
+// yr_scanner_get_string_profiling_info
+//
+// Returns a pointer to an array of YR_STRING_PROFILING_INFO structures with
+// information about the cost of each string. The array has one entry per
+// string, indexed by YR_STRING.idx. The caller is responsible for freeing the
+// returned array by calling yr_free. Calling this function only makes sense if
+// YR_PROFILING_ENABLED is defined; if not, all entries are zeroed.
+//
+YR_API YR_STRING_PROFILING_INFO* yr_scanner_get_string_profiling_info(
+    YR_SCANNER* scanner)
+{
+  size_t size = scanner->rules->num_strings;
+  YR_STRING_PROFILING_INFO* profiling_info = yr_malloc(
+      (size > 0 ? size : 1) * sizeof(YR_STRING_PROFILING_INFO));
+
+  if (profiling_info == NULL)
+    return NULL;
+
+#ifdef YR_PROFILING_ENABLED
+  if (size > 0)
+  {
+    memcpy(
+        profiling_info,
+        scanner->string_profiling_info,
+        size * sizeof(YR_STRING_PROFILING_INFO));
+  }
+#else
+  if (size > 0)
+    memset(profiling_info, 0, size * sizeof(YR_STRING_PROFILING_INFO));
+#endif
+
+  return profiling_info;
+}
+
 YR_API void yr_scanner_reset_profiling_info(YR_SCANNER* scanner)
 {
 #ifdef YR_PROFILING_ENABLED
@@ -887,6 +935,11 @@ YR_API void yr_scanner_reset_profiling_info(YR_SCANNER* scanner)
       scanner->profiling_info,
       0,
       scanner->rules->num_rules * sizeof(YR_PROFILING_INFO));
+
+  memset(
+      scanner->string_profiling_info,
+      0,
+      scanner->rules->num_strings * sizeof(YR_STRING_PROFILING_INFO));
 #endif
 }
 

@@ -42,6 +42,86 @@ YARA is multi-platform, running on Windows, Linux and Mac OS X, and can be used
 through its command-line interface or from your own Python scripts with the
 yara-python extension.
 
+## Performance analysis
+
+`yara-perf` is a standalone command-line analyzer for large rule sets. It scans
+a directory once and writes a JSON report with per-rule timing, per-string hit
+counts and timing shares, aggregate statistics by tag/author/severity, and the
+slowest samples. It also writes folded stacks that can be rendered with
+[flamegraph.pl](https://github.com/brendangregg/FlameGraph).
+
+The analyzer uses the same compiler, scanner, callbacks and scan flags as the
+`yara` command. Match results are therefore taken from the normal YARA scanner,
+not from a reimplementation of the matching logic. Timing instrumentation is
+compiled only into the small scanner library used by `yara-perf`; the normal
+`yara`, `yarac` and `libyara` builds keep their default instrumentation-free
+configuration.
+
+### Build
+
+```sh
+./bootstrap.sh
+./configure
+make
+```
+
+### Usage
+
+```sh
+# Rules can be a single file or a directory. Directories are searched
+# recursively and .yar, .yara, .rule and .rules files are compiled.
+# Conventional include/ and includes/ subdirectories are skipped because
+# their files are loaded through include statements.
+./yara-perf rules/ samples/ > report.json
+
+# Write the JSON report and folded stacks to explicit files.
+./yara-perf -o report.json -F yara-perf.folded rules/ samples/
+
+# Per-sample 30 second timeout and 512 MiB address-space limit.
+./yara-perf -t 30 -m 512M -o report.json -F yara-perf.folded rules/ samples/
+
+# Render the folded stacks.
+flamegraph.pl yara-perf.folded > yara-perf.svg
+```
+
+Options:
+
+- Long options that take a value use the `--name=value` form, for example
+  `--timeout=30`. Short options accept a space-separated value.
+- `-o FILE`, `--output=FILE`: JSON output file. The default is stdout; use
+  `-o -` explicitly for stdout.
+- `-F FILE`, `--folded=FILE`: folded stack output. Defaults to
+  `yara-perf.folded`.
+- `-t SECONDS`, `--timeout=SECONDS`: per-sample scan timeout. Timed-out samples
+  are reported with `"status": "timeout"` and listed under `timeouts`.
+- `-m SIZE`, `--memory-limit=SIZE`: per-sample address-space limit (`K`, `M`,
+  `G` suffixes are accepted). Samples that hit the limit are reported with
+  `"status": "memory_limit"` and listed under `memory_limit_samples`.
+- `-d VAR=VALUE`, `--define=VAR=VALUE`: define an external variable.
+- `-f`, `--fast-scan`: use YARA fast mode, matching `yara -f`.
+- `-q`, `--quiet`: suppress progress output on stderr.
+
+The JSON report contains:
+
+- `rules`: rules sorted by total time, with `matched_samples`,
+  `total_time_ns`, `match_time_ns`, `condition_time_ns`, `atom_matches`, and a
+  `strings` array. Each string has `hit_count`, `match_time_ns` and
+  `time_share` (its share of the containing rule's string verification time).
+- `aggregates`: `tags`, `authors` and `severities` groups, each with rule
+  counts, matched samples, total time and time share.
+- `slowest_samples`: the 20 slowest samples, including status and matched rules.
+- `timeouts`, `memory_limit_samples`, `errors`: samples that did not complete
+  normally.
+
+String timing uses the actual atom-verification path in the scanner. A string
+that generates many atom candidates is charged for each verification, which is
+usually a better indicator than raw final match counts when looking for slow
+strings. The folded stacks split each sample into rule/string/condition leaves
+and include a `scan_overhead` leaf for mapping and other non-rule work.
+
+`yara-perf` currently requires a POSIX platform (Linux, macOS, BSD) because the
+per-sample timeout and address-space controls use POSIX process APIs.
+
 ## Additional resources
 
 Do you use GitHub for storing your YARA rules? [YARA-CI](https://yara-ci.cloud.virustotal.com)

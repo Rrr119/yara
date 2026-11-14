@@ -179,6 +179,7 @@ typedef struct YR_SUMMARY YR_SUMMARY;
 typedef struct YR_RULES_STATS YR_RULES_STATS;
 typedef struct YR_PROFILING_INFO YR_PROFILING_INFO;
 typedef struct YR_RULE_PROFILING_INFO YR_RULE_PROFILING_INFO;
+typedef struct YR_STRING_PROFILING_INFO YR_STRING_PROFILING_INFO;
 typedef struct YR_EXTERNAL_VARIABLE YR_EXTERNAL_VARIABLE;
 typedef struct YR_MATCH YR_MATCH;
 typedef struct YR_SCAN_CONTEXT YR_SCAN_CONTEXT;
@@ -673,6 +674,11 @@ struct YR_PROFILING_INFO
   // matching atom means a potential string match that needs to be verified.
   uint32_t atom_matches;
 
+  // Number of atom matches for which verification time was measured. This is
+  // used for scaling match_time when there are less atom matches than the
+  // profiling sampling rate.
+  uint32_t match_samples;
+
   // Amount of time (in nanoseconds) spent verifying atom matches for
   // determining if the corresponding string actually matched or not. This
   // time is not measured for all atom matches, only 1 out of 1024 matches
@@ -681,6 +687,22 @@ struct YR_PROFILING_INFO
 
   // Amount of time (in nanoseconds) spent evaluating the rule condition.
   uint64_t exec_time;
+};
+
+//
+// YR_STRING_PROFILING_INFO contains profiling information for a string.
+//
+struct YR_STRING_PROFILING_INFO
+{
+  // Number of times that an atom belonging to this string matched.
+  uint32_t atom_matches;
+
+  // Number of atom matches for which verification time was measured.
+  uint32_t match_samples;
+
+  // Amount of time (in nanoseconds) spent verifying atom matches belonging to
+  // this string. Like YR_PROFILING_INFO.match_time, this is sampled.
+  uint64_t match_time;
 };
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -836,6 +858,12 @@ struct YR_SCAN_CONTEXT
   // profiling_info is a pointer to an array of YR_PROFILING_INFO structures,
   // one per rule. Entry N has the profiling information for rule with index N.
   YR_PROFILING_INFO* profiling_info;
+
+  // string_profiling_info is a pointer to an array of
+  // YR_STRING_PROFILING_INFO structures, one per string. Entry N has the
+  // profiling information for string with index N. It is NULL when profiling
+  // support is disabled.
+  YR_STRING_PROFILING_INFO* string_profiling_info;
 };
 
 union YR_VALUE

@@ -51,6 +51,8 @@ stamp-h1
 # Project specific files
 /yara
 /yarac
+/yara-perf
+/yara-perf.folded
 /libyara/modules/.dirstamp
 libyara/proc/.dirstamp
 /yara.pc

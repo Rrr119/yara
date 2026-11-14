@@ -91,6 +91,9 @@ YR_API YR_STRING* yr_scanner_last_error_string(YR_SCANNER* scanner);
 YR_API YR_RULE_PROFILING_INFO* yr_scanner_get_profiling_info(
     YR_SCANNER* scanner);
 
+YR_API YR_STRING_PROFILING_INFO* yr_scanner_get_string_profiling_info(
+    YR_SCANNER* scanner);
+
 YR_API void yr_scanner_reset_profiling_info(YR_SCANNER* scanner);
 
 YR_API int yr_scanner_print_profiling_info(YR_SCANNER* scanner);
