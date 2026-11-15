@@ -82,6 +82,335 @@ static uint32_t read_index(const uint8_t** data, uint8_t len)
     return read_u32(data);
 }
 
+// ECMA-335 II.25.4.2, CorILMethod. The low two bits identify the method body
+// format, while the remaining bits carry format-specific information.
+#define DOTNET_METHOD_FORMAT_MASK  0x03
+#define DOTNET_METHOD_TINY_FORMAT  0x02
+#define DOTNET_METHOD_FAT_FORMAT   0x03
+#define DOTNET_METHOD_MORE_SECTS   0x08
+#define DOTNET_METHOD_INIT_LOCALS  0x10
+
+// ECMA-335 II.25.4.6, CorILMethodSect.
+#define DOTNET_METHOD_SECT_EH_TABLE   0x01
+#define DOTNET_METHOD_SECT_KIND_MASK  0x3f
+#define DOTNET_METHOD_SECT_FAT_FORMAT 0x40
+
+#define DOTNET_MAX_IL_INSTRUCTIONS 100000
+#define DOTNET_MAX_EH_CLAUSES      10000
+#define DOTNET_MAX_PATTERN_TOKENS  128
+
+typedef enum
+{
+  DOTNET_OPERAND_NONE = 0,
+  DOTNET_OPERAND_I1,
+  DOTNET_OPERAND_I4,
+  DOTNET_OPERAND_I8,
+  DOTNET_OPERAND_R4,
+  DOTNET_OPERAND_R8,
+  DOTNET_OPERAND_METHOD,
+  DOTNET_OPERAND_FIELD,
+  DOTNET_OPERAND_TYPE,
+  DOTNET_OPERAND_STRING,
+  DOTNET_OPERAND_TOKEN,
+  DOTNET_OPERAND_SIG,
+  DOTNET_OPERAND_VAR,
+  DOTNET_OPERAND_SHORT_VAR,
+  DOTNET_OPERAND_BRANCH,
+  DOTNET_OPERAND_SHORT_BRANCH,
+  DOTNET_OPERAND_SWITCH
+} DOTNET_OPERAND_KIND;
+
+typedef struct
+{
+  uint16_t opcode;
+  const char* name;
+  DOTNET_OPERAND_KIND operand_type;
+} DOTNET_OPCODE;
+
+// Complete CIL opcode table (ECMA-335 III). Two-byte opcodes are represented
+// with the 0xFE prefix, e.g. ceq is 0xFE01. The table is sorted by opcode.
+static const DOTNET_OPCODE dotnet_opcodes[] = {
+    {0x0000, "nop", DOTNET_OPERAND_NONE},
+    {0x0001, "break", DOTNET_OPERAND_NONE},
+    {0x0002, "ldarg.0", DOTNET_OPERAND_NONE},
+    {0x0003, "ldarg.1", DOTNET_OPERAND_NONE},
+    {0x0004, "ldarg.2", DOTNET_OPERAND_NONE},
+    {0x0005, "ldarg.3", DOTNET_OPERAND_NONE},
+    {0x0006, "ldloc.0", DOTNET_OPERAND_NONE},
+    {0x0007, "ldloc.1", DOTNET_OPERAND_NONE},
+    {0x0008, "ldloc.2", DOTNET_OPERAND_NONE},
+    {0x0009, "ldloc.3", DOTNET_OPERAND_NONE},
+    {0x000A, "stloc.0", DOTNET_OPERAND_NONE},
+    {0x000B, "stloc.1", DOTNET_OPERAND_NONE},
+    {0x000C, "stloc.2", DOTNET_OPERAND_NONE},
+    {0x000D, "stloc.3", DOTNET_OPERAND_NONE},
+    {0x000E, "ldarg.s", DOTNET_OPERAND_SHORT_VAR},
+    {0x000F, "ldarga.s", DOTNET_OPERAND_SHORT_VAR},
+    {0x0010, "starg.s", DOTNET_OPERAND_SHORT_VAR},
+    {0x0011, "ldloc.s", DOTNET_OPERAND_SHORT_VAR},
+    {0x0012, "ldloca.s", DOTNET_OPERAND_SHORT_VAR},
+    {0x0013, "stloc.s", DOTNET_OPERAND_SHORT_VAR},
+    {0x0014, "ldnull", DOTNET_OPERAND_NONE},
+    {0x0015, "ldc.i4.m1", DOTNET_OPERAND_NONE},
+    {0x0016, "ldc.i4.0", DOTNET_OPERAND_NONE},
+    {0x0017, "ldc.i4.1", DOTNET_OPERAND_NONE},
+    {0x0018, "ldc.i4.2", DOTNET_OPERAND_NONE},
+    {0x0019, "ldc.i4.3", DOTNET_OPERAND_NONE},
+    {0x001A, "ldc.i4.4", DOTNET_OPERAND_NONE},
+    {0x001B, "ldc.i4.5", DOTNET_OPERAND_NONE},
+    {0x001C, "ldc.i4.6", DOTNET_OPERAND_NONE},
+    {0x001D, "ldc.i4.7", DOTNET_OPERAND_NONE},
+    {0x001E, "ldc.i4.8", DOTNET_OPERAND_NONE},
+    {0x001F, "ldc.i4.s", DOTNET_OPERAND_I1},
+    {0x0020, "ldc.i4", DOTNET_OPERAND_I4},
+    {0x0021, "ldc.i8", DOTNET_OPERAND_I8},
+    {0x0022, "ldc.r4", DOTNET_OPERAND_R4},
+    {0x0023, "ldc.r8", DOTNET_OPERAND_R8},
+    {0x0025, "dup", DOTNET_OPERAND_NONE},
+    {0x0026, "pop", DOTNET_OPERAND_NONE},
+    {0x0027, "jmp", DOTNET_OPERAND_METHOD},
+    {0x0028, "call", DOTNET_OPERAND_METHOD},
+    {0x0029, "calli", DOTNET_OPERAND_SIG},
+    {0x002A, "ret", DOTNET_OPERAND_NONE},
+    {0x002B, "br.s", DOTNET_OPERAND_SHORT_BRANCH},
+    {0x002C, "brfalse.s", DOTNET_OPERAND_SHORT_BRANCH},
+    {0x002D, "brtrue.s", DOTNET_OPERAND_SHORT_BRANCH},
+    {0x002E, "beq.s", DOTNET_OPERAND_SHORT_BRANCH},
+    {0x002F, "bge.s", DOTNET_OPERAND_SHORT_BRANCH},
+    {0x0030, "bgt.s", DOTNET_OPERAND_SHORT_BRANCH},
+    {0x0031, "ble.s", DOTNET_OPERAND_SHORT_BRANCH},
+    {0x0032, "blt.s", DOTNET_OPERAND_SHORT_BRANCH},
+    {0x0033, "bne.un.s", DOTNET_OPERAND_SHORT_BRANCH},
+    {0x0034, "bge.un.s", DOTNET_OPERAND_SHORT_BRANCH},
+    {0x0035, "bgt.un.s", DOTNET_OPERAND_SHORT_BRANCH},
+    {0x0036, "ble.un.s", DOTNET_OPERAND_SHORT_BRANCH},
+    {0x0037, "blt.un.s", DOTNET_OPERAND_SHORT_BRANCH},
+    {0x0038, "br", DOTNET_OPERAND_BRANCH},
+    {0x0039, "brfalse", DOTNET_OPERAND_BRANCH},
+    {0x003A, "brtrue", DOTNET_OPERAND_BRANCH},
+    {0x003B, "beq", DOTNET_OPERAND_BRANCH},
+    {0x003C, "bge", DOTNET_OPERAND_BRANCH},
+    {0x003D, "bgt", DOTNET_OPERAND_BRANCH},
+    {0x003E, "ble", DOTNET_OPERAND_BRANCH},
+    {0x003F, "blt", DOTNET_OPERAND_BRANCH},
+    {0x0040, "bne.un", DOTNET_OPERAND_BRANCH},
+    {0x0041, "bge.un", DOTNET_OPERAND_BRANCH},
+    {0x0042, "bgt.un", DOTNET_OPERAND_BRANCH},
+    {0x0043, "ble.un", DOTNET_OPERAND_BRANCH},
+    {0x0044, "blt.un", DOTNET_OPERAND_BRANCH},
+    {0x0045, "switch", DOTNET_OPERAND_SWITCH},
+    {0x0046, "ldind.i1", DOTNET_OPERAND_NONE},
+    {0x0047, "ldind.u1", DOTNET_OPERAND_NONE},
+    {0x0048, "ldind.i2", DOTNET_OPERAND_NONE},
+    {0x0049, "ldind.u2", DOTNET_OPERAND_NONE},
+    {0x004A, "ldind.i4", DOTNET_OPERAND_NONE},
+    {0x004B, "ldind.u4", DOTNET_OPERAND_NONE},
+    {0x004C, "ldind.i8", DOTNET_OPERAND_NONE},
+    {0x004D, "ldind.i", DOTNET_OPERAND_NONE},
+    {0x004E, "ldind.r4", DOTNET_OPERAND_NONE},
+    {0x004F, "ldind.r8", DOTNET_OPERAND_NONE},
+    {0x0050, "ldind.ref", DOTNET_OPERAND_NONE},
+    {0x0051, "stind.ref", DOTNET_OPERAND_NONE},
+    {0x0052, "stind.i1", DOTNET_OPERAND_NONE},
+    {0x0053, "stind.i2", DOTNET_OPERAND_NONE},
+    {0x0054, "stind.i4", DOTNET_OPERAND_NONE},
+    {0x0055, "stind.i8", DOTNET_OPERAND_NONE},
+    {0x0056, "stind.r4", DOTNET_OPERAND_NONE},
+    {0x0057, "stind.r8", DOTNET_OPERAND_NONE},
+    {0x0058, "add", DOTNET_OPERAND_NONE},
+    {0x0059, "sub", DOTNET_OPERAND_NONE},
+    {0x005A, "mul", DOTNET_OPERAND_NONE},
+    {0x005B, "div", DOTNET_OPERAND_NONE},
+    {0x005C, "div.un", DOTNET_OPERAND_NONE},
+    {0x005D, "rem", DOTNET_OPERAND_NONE},
+    {0x005E, "rem.un", DOTNET_OPERAND_NONE},
+    {0x005F, "and", DOTNET_OPERAND_NONE},
+    {0x0060, "or", DOTNET_OPERAND_NONE},
+    {0x0061, "xor", DOTNET_OPERAND_NONE},
+    {0x0062, "shl", DOTNET_OPERAND_NONE},
+    {0x0063, "shr", DOTNET_OPERAND_NONE},
+    {0x0064, "shr.un", DOTNET_OPERAND_NONE},
+    {0x0065, "neg", DOTNET_OPERAND_NONE},
+    {0x0066, "not", DOTNET_OPERAND_NONE},
+    {0x0067, "conv.i1", DOTNET_OPERAND_NONE},
+    {0x0068, "conv.i2", DOTNET_OPERAND_NONE},
+    {0x0069, "conv.i4", DOTNET_OPERAND_NONE},
+    {0x006A, "conv.i8", DOTNET_OPERAND_NONE},
+    {0x006B, "conv.r4", DOTNET_OPERAND_NONE},
+    {0x006C, "conv.r8", DOTNET_OPERAND_NONE},
+    {0x006D, "conv.u4", DOTNET_OPERAND_NONE},
+    {0x006E, "conv.u8", DOTNET_OPERAND_NONE},
+    {0x006F, "callvirt", DOTNET_OPERAND_METHOD},
+    {0x0070, "cpobj", DOTNET_OPERAND_TYPE},
+    {0x0071, "ldobj", DOTNET_OPERAND_TYPE},
+    {0x0072, "ldstr", DOTNET_OPERAND_STRING},
+    {0x0073, "newobj", DOTNET_OPERAND_METHOD},
+    {0x0074, "castclass", DOTNET_OPERAND_TYPE},
+    {0x0075, "isinst", DOTNET_OPERAND_TYPE},
+    {0x0076, "conv.r.un", DOTNET_OPERAND_NONE},
+    {0x0079, "unbox", DOTNET_OPERAND_TYPE},
+    {0x007A, "throw", DOTNET_OPERAND_NONE},
+    {0x007B, "ldfld", DOTNET_OPERAND_FIELD},
+    {0x007C, "ldflda", DOTNET_OPERAND_FIELD},
+    {0x007D, "stfld", DOTNET_OPERAND_FIELD},
+    {0x007E, "ldsfld", DOTNET_OPERAND_FIELD},
+    {0x007F, "ldsflda", DOTNET_OPERAND_FIELD},
+    {0x0080, "stsfld", DOTNET_OPERAND_FIELD},
+    {0x0081, "stobj", DOTNET_OPERAND_TYPE},
+    {0x0082, "conv.ovf.i1.un", DOTNET_OPERAND_NONE},
+    {0x0083, "conv.ovf.i2.un", DOTNET_OPERAND_NONE},
+    {0x0084, "conv.ovf.i4.un", DOTNET_OPERAND_NONE},
+    {0x0085, "conv.ovf.i8.un", DOTNET_OPERAND_NONE},
+    {0x0086, "conv.ovf.u1.un", DOTNET_OPERAND_NONE},
+    {0x0087, "conv.ovf.u2.un", DOTNET_OPERAND_NONE},
+    {0x0088, "conv.ovf.u4.un", DOTNET_OPERAND_NONE},
+    {0x0089, "conv.ovf.u8.un", DOTNET_OPERAND_NONE},
+    {0x008A, "conv.ovf.i.un", DOTNET_OPERAND_NONE},
+    {0x008B, "conv.ovf.u.un", DOTNET_OPERAND_NONE},
+    {0x008C, "box", DOTNET_OPERAND_TYPE},
+    {0x008D, "newarr", DOTNET_OPERAND_TYPE},
+    {0x008E, "ldlen", DOTNET_OPERAND_NONE},
+    {0x008F, "ldelema", DOTNET_OPERAND_TYPE},
+    {0x0090, "ldelem.i1", DOTNET_OPERAND_NONE},
+    {0x0091, "ldelem.u1", DOTNET_OPERAND_NONE},
+    {0x0092, "ldelem.i2", DOTNET_OPERAND_NONE},
+    {0x0093, "ldelem.u2", DOTNET_OPERAND_NONE},
+    {0x0094, "ldelem.i4", DOTNET_OPERAND_NONE},
+    {0x0095, "ldelem.u4", DOTNET_OPERAND_NONE},
+    {0x0096, "ldelem.i8", DOTNET_OPERAND_NONE},
+    {0x0097, "ldelem.i", DOTNET_OPERAND_NONE},
+    {0x0098, "ldelem.r4", DOTNET_OPERAND_NONE},
+    {0x0099, "ldelem.r8", DOTNET_OPERAND_NONE},
+    {0x009A, "ldelem.ref", DOTNET_OPERAND_NONE},
+    {0x009B, "stelem.i", DOTNET_OPERAND_NONE},
+    {0x009C, "stelem.i1", DOTNET_OPERAND_NONE},
+    {0x009D, "stelem.i2", DOTNET_OPERAND_NONE},
+    {0x009E, "stelem.i4", DOTNET_OPERAND_NONE},
+    {0x009F, "stelem.i8", DOTNET_OPERAND_NONE},
+    {0x00A0, "stelem.r4", DOTNET_OPERAND_NONE},
+    {0x00A1, "stelem.r8", DOTNET_OPERAND_NONE},
+    {0x00A2, "stelem.ref", DOTNET_OPERAND_NONE},
+    {0x00A3, "ldelem", DOTNET_OPERAND_TYPE},
+    {0x00A4, "stelem", DOTNET_OPERAND_TYPE},
+    {0x00A5, "unbox.any", DOTNET_OPERAND_TYPE},
+    {0x00B3, "conv.ovf.i1", DOTNET_OPERAND_NONE},
+    {0x00B4, "conv.ovf.u1", DOTNET_OPERAND_NONE},
+    {0x00B5, "conv.ovf.i2", DOTNET_OPERAND_NONE},
+    {0x00B6, "conv.ovf.u2", DOTNET_OPERAND_NONE},
+    {0x00B7, "conv.ovf.i4", DOTNET_OPERAND_NONE},
+    {0x00B8, "conv.ovf.u4", DOTNET_OPERAND_NONE},
+    {0x00B9, "conv.ovf.i8", DOTNET_OPERAND_NONE},
+    {0x00BA, "conv.ovf.u8", DOTNET_OPERAND_NONE},
+    {0x00C2, "refanyval", DOTNET_OPERAND_TYPE},
+    {0x00C3, "ckfinite", DOTNET_OPERAND_NONE},
+    {0x00C6, "mkrefany", DOTNET_OPERAND_TYPE},
+    {0x00D0, "ldtoken", DOTNET_OPERAND_TOKEN},
+    {0x00D1, "conv.u2", DOTNET_OPERAND_NONE},
+    {0x00D2, "conv.u1", DOTNET_OPERAND_NONE},
+    {0x00D3, "conv.i", DOTNET_OPERAND_NONE},
+    {0x00D4, "conv.ovf.i", DOTNET_OPERAND_NONE},
+    {0x00D5, "conv.ovf.u", DOTNET_OPERAND_NONE},
+    {0x00D6, "add.ovf", DOTNET_OPERAND_NONE},
+    {0x00D7, "add.ovf.un", DOTNET_OPERAND_NONE},
+    {0x00D8, "mul.ovf", DOTNET_OPERAND_NONE},
+    {0x00D9, "mul.ovf.un", DOTNET_OPERAND_NONE},
+    {0x00DA, "sub.ovf", DOTNET_OPERAND_NONE},
+    {0x00DB, "sub.ovf.un", DOTNET_OPERAND_NONE},
+    {0x00DC, "endfinally", DOTNET_OPERAND_NONE},
+    {0x00DD, "leave", DOTNET_OPERAND_BRANCH},
+    {0x00DE, "leave.s", DOTNET_OPERAND_SHORT_BRANCH},
+    {0x00DF, "stind.i", DOTNET_OPERAND_NONE},
+    {0x00E0, "conv.u", DOTNET_OPERAND_NONE},
+    {0x00F8, "prefix7", DOTNET_OPERAND_NONE},
+    {0x00F9, "prefix6", DOTNET_OPERAND_NONE},
+    {0x00FA, "prefix5", DOTNET_OPERAND_NONE},
+    {0x00FB, "prefix4", DOTNET_OPERAND_NONE},
+    {0x00FC, "prefix3", DOTNET_OPERAND_NONE},
+    {0x00FD, "prefix2", DOTNET_OPERAND_NONE},
+    {0x00FE, "prefix1", DOTNET_OPERAND_NONE},
+    {0x00FF, "prefixref", DOTNET_OPERAND_NONE},
+    {0xFE00, "arglist", DOTNET_OPERAND_NONE},
+    {0xFE01, "ceq", DOTNET_OPERAND_NONE},
+    {0xFE02, "cgt", DOTNET_OPERAND_NONE},
+    {0xFE03, "cgt.un", DOTNET_OPERAND_NONE},
+    {0xFE04, "clt", DOTNET_OPERAND_NONE},
+    {0xFE05, "clt.un", DOTNET_OPERAND_NONE},
+    {0xFE06, "ldftn", DOTNET_OPERAND_METHOD},
+    {0xFE07, "ldvirtftn", DOTNET_OPERAND_METHOD},
+    {0xFE09, "ldarg", DOTNET_OPERAND_VAR},
+    {0xFE0A, "ldarga", DOTNET_OPERAND_VAR},
+    {0xFE0B, "starg", DOTNET_OPERAND_VAR},
+    {0xFE0C, "ldloc", DOTNET_OPERAND_VAR},
+    {0xFE0D, "ldloca", DOTNET_OPERAND_VAR},
+    {0xFE0E, "stloc", DOTNET_OPERAND_VAR},
+    {0xFE0F, "localloc", DOTNET_OPERAND_NONE},
+    {0xFE11, "endfilter", DOTNET_OPERAND_NONE},
+    {0xFE12, "unaligned.", DOTNET_OPERAND_I1},
+    {0xFE13, "volatile.", DOTNET_OPERAND_NONE},
+    {0xFE14, "tail.", DOTNET_OPERAND_NONE},
+    {0xFE15, "initobj", DOTNET_OPERAND_TYPE},
+    {0xFE16, "constrained.", DOTNET_OPERAND_TYPE},
+    {0xFE17, "cpblk", DOTNET_OPERAND_NONE},
+    {0xFE18, "initblk", DOTNET_OPERAND_NONE},
+    {0xFE19, "no.", DOTNET_OPERAND_I1},
+    {0xFE1A, "rethrow", DOTNET_OPERAND_NONE},
+    {0xFE1C, "sizeof", DOTNET_OPERAND_TYPE},
+    {0xFE1D, "refanytype", DOTNET_OPERAND_NONE},
+    {0xFE1E, "readonly.", DOTNET_OPERAND_NONE},
+};
+
+static const DOTNET_OPCODE* dotnet_lookup_opcode(uint16_t opcode)
+{
+  size_t low = 0;
+  size_t high = sizeof(dotnet_opcodes) / sizeof(dotnet_opcodes[0]);
+
+  while (low < high)
+  {
+    size_t mid = low + (high - low) / 2;
+
+    if (dotnet_opcodes[mid].opcode == opcode)
+      return &dotnet_opcodes[mid];
+    else if (dotnet_opcodes[mid].opcode < opcode)
+      low = mid + 1;
+    else
+      high = mid;
+  }
+
+  return NULL;
+}
+
+static uint32_t dotnet_operand_size(const DOTNET_OPCODE* opcode)
+{
+  switch (opcode->operand_type)
+  {
+  case DOTNET_OPERAND_NONE:
+    return 0;
+  case DOTNET_OPERAND_I1:
+  case DOTNET_OPERAND_SHORT_VAR:
+  case DOTNET_OPERAND_SHORT_BRANCH:
+    return 1;
+  case DOTNET_OPERAND_VAR:
+    return 2;
+  case DOTNET_OPERAND_I4:
+  case DOTNET_OPERAND_R4:
+  case DOTNET_OPERAND_METHOD:
+  case DOTNET_OPERAND_FIELD:
+  case DOTNET_OPERAND_TYPE:
+  case DOTNET_OPERAND_STRING:
+  case DOTNET_OPERAND_TOKEN:
+  case DOTNET_OPERAND_SIG:
+  case DOTNET_OPERAND_BRANCH:
+    return 4;
+  case DOTNET_OPERAND_I8:
+  case DOTNET_OPERAND_R8:
+    return 8;
+  case DOTNET_OPERAND_SWITCH:
+    return 0;
+  }
+
+  return 0;
+}
+
 // Returns valid offset within the table or NULL
 const uint8_t* get_table_offset(const TABLE_INFO* tbl, uint32_t index)
 {
@@ -1335,6 +1664,642 @@ cleanup:
   result->len = 0;
 }
 
+static bool dotnet_fits_at(PE* pe, int64_t offset, size_t size)
+{
+  return offset >= 0 && (uint64_t) offset <= pe->data_size &&
+         fits_in_pe(pe, pe->data + offset, size);
+}
+
+static void dotnet_set_eh_handler(
+    YR_OBJECT* out_obj,
+    uint32_t class_idx,
+    uint32_t method_idx,
+    uint32_t handler_idx,
+    int64_t clause_offset,
+    uint32_t flags,
+    uint32_t try_offset,
+    uint32_t try_length,
+    uint32_t handler_offset,
+    uint32_t handler_length,
+    uint32_t class_token,
+    uint32_t filter_offset)
+{
+  const char* type;
+
+  switch (flags & 0x7)
+  {
+  case 0:
+    type = "catch";
+    break;
+  case 1:
+    type = "filter";
+    break;
+  case 2:
+    type = "finally";
+    break;
+  case 4:
+    type = "fault";
+    break;
+  default:
+    type = "unknown";
+    break;
+  }
+
+#define SET_EH_INTEGER(field, value)                                          \
+  do                                                                          \
+  {                                                                           \
+    yr_set_integer(                                                           \
+        value,                                                                \
+        out_obj,                                                              \
+        "classes[%i].methods[%i].exception_handlers[%i]." field,              \
+        class_idx,                                                            \
+        method_idx,                                                           \
+        handler_idx);                                                         \
+    yr_set_integer(                                                           \
+        value,                                                                \
+        out_obj,                                                              \
+        "classes[%i].methods[%i].exception_regions[%i]." field,               \
+        class_idx,                                                            \
+        method_idx,                                                           \
+        handler_idx);                                                         \
+  } while (0)
+
+#define SET_EH_STRING(field, value)                                           \
+  do                                                                          \
+  {                                                                           \
+    yr_set_string(                                                            \
+        value,                                                                \
+        out_obj,                                                              \
+        "classes[%i].methods[%i].exception_handlers[%i]." field,              \
+        class_idx,                                                            \
+        method_idx,                                                           \
+        handler_idx);                                                         \
+    yr_set_string(                                                            \
+        value,                                                                \
+        out_obj,                                                              \
+        "classes[%i].methods[%i].exception_regions[%i]." field,               \
+        class_idx,                                                            \
+        method_idx,                                                           \
+        handler_idx);                                                         \
+  } while (0)
+
+  SET_EH_INTEGER("offset", clause_offset);
+  SET_EH_INTEGER("flags", flags);
+  SET_EH_INTEGER("try_offset", try_offset);
+  SET_EH_INTEGER("try_start", try_offset);
+  SET_EH_INTEGER("try_length", try_length);
+  SET_EH_INTEGER("try_end", (int64_t) try_offset + try_length);
+  SET_EH_INTEGER("handler_offset", handler_offset);
+  SET_EH_INTEGER("handler_start", handler_offset);
+  SET_EH_INTEGER("handler_length", handler_length);
+  SET_EH_INTEGER("handler_end", (int64_t) handler_offset + handler_length);
+  SET_EH_INTEGER("class_token", class_token);
+  SET_EH_INTEGER("catch_type", class_token);
+  SET_EH_INTEGER("catch_type_token", class_token);
+  SET_EH_INTEGER("filter_offset", filter_offset);
+  SET_EH_INTEGER("filter_start", filter_offset);
+  SET_EH_INTEGER("exception_type", flags);
+  SET_EH_STRING("type", type);
+  SET_EH_STRING("handler_type", type);
+
+#undef SET_EH_INTEGER
+#undef SET_EH_STRING
+}
+
+static uint32_t dotnet_parse_exception_sections(
+    PE* pe,
+    YR_OBJECT* out_obj,
+    uint32_t class_idx,
+    uint32_t method_idx,
+    int64_t body_offset,
+    uint32_t header_size,
+    uint32_t code_size,
+    uint32_t flags)
+{
+  uint32_t handler_count = 0;
+  uint32_t section_count = 0;
+  int64_t section_offset;
+  int64_t body_end = body_offset + header_size + code_size;
+
+  if (!(flags & DOTNET_METHOD_MORE_SECTS))
+    return 0;
+
+  section_offset = body_offset + ((header_size + code_size + 3) & ~3u);
+
+  while (section_count++ < 16 && dotnet_fits_at(pe, section_offset, 4))
+  {
+    const uint8_t* section = pe->data + section_offset;
+    uint8_t kind = section[0];
+    uint32_t data_size;
+    bool fat = (kind & DOTNET_METHOD_SECT_FAT_FORMAT) != 0;
+
+    if (fat)
+      data_size = (uint32_t) section[1] | ((uint32_t) section[2] << 8) |
+                  ((uint32_t) section[3] << 16);
+    else
+      data_size = section[1];
+
+    if (!dotnet_fits_at(pe, section_offset + 4, data_size))
+      break;
+
+    if ((kind & DOTNET_METHOD_SECT_KIND_MASK) ==
+        DOTNET_METHOD_SECT_EH_TABLE)
+    {
+      uint32_t clause_size = fat ? 24 : 12;
+      uint32_t clauses = data_size / clause_size;
+      const uint8_t* clause_data = section + 4;
+
+      for (uint32_t i = 0; i < clauses && i < DOTNET_MAX_EH_CLAUSES; i++)
+      {
+        const uint8_t* clause = clause_data + i * clause_size;
+        uint32_t clause_flags;
+        uint32_t try_offset;
+        uint32_t try_length;
+        uint32_t handler_offset;
+        uint32_t handler_length;
+        uint32_t class_token = 0;
+        uint32_t filter_offset = 0;
+
+        if (fat)
+        {
+          clause_flags = yr_le32toh(yr_unaligned_u32(clause));
+          try_offset = yr_le32toh(yr_unaligned_u32(clause + 4));
+          try_length = yr_le32toh(yr_unaligned_u32(clause + 8));
+          handler_offset = yr_le32toh(yr_unaligned_u32(clause + 12));
+          handler_length = yr_le32toh(yr_unaligned_u32(clause + 16));
+
+          if ((clause_flags & 0x7) == 0)
+            class_token = yr_le32toh(yr_unaligned_u32(clause + 20));
+          else if ((clause_flags & 0x7) == 1)
+            filter_offset = yr_le32toh(yr_unaligned_u32(clause + 20));
+        }
+        else
+        {
+          clause_flags = yr_le16toh(yr_unaligned_u16(clause));
+          try_offset = yr_le16toh(yr_unaligned_u16(clause + 2));
+          try_length = clause[4];
+          handler_offset = yr_le16toh(yr_unaligned_u16(clause + 5));
+          handler_length = clause[7];
+
+          if ((clause_flags & 0x7) == 0)
+            class_token = yr_le32toh(yr_unaligned_u32(clause + 8));
+          else if ((clause_flags & 0x7) == 1)
+            filter_offset = yr_le32toh(yr_unaligned_u32(clause + 8));
+        }
+
+        dotnet_set_eh_handler(
+            out_obj,
+            class_idx,
+            method_idx,
+            handler_count,
+            section_offset + 4 + i * clause_size,
+            clause_flags,
+            try_offset,
+            try_length,
+            handler_offset,
+            handler_length,
+            class_token,
+            filter_offset);
+
+        handler_count++;
+      }
+    }
+
+    body_end = section_offset + 4 + data_size;
+
+    if (!(kind & 0x80))
+      break;
+
+    section_offset = (body_end + 3) & ~3;
+  }
+
+  yr_set_integer(
+      body_end - body_offset,
+      out_obj,
+      "classes[%i].methods[%i].body_size",
+      class_idx,
+      method_idx);
+  yr_set_integer(
+      body_end - body_offset,
+      out_obj,
+      "classes[%i].methods[%i].size",
+      class_idx,
+      method_idx);
+
+  return handler_count;
+}
+
+static void dotnet_parse_method_body(
+    PE* pe,
+    uint32_t method_rva,
+    uint32_t class_idx,
+    uint32_t method_idx)
+{
+  YR_OBJECT* out_obj = pe->object;
+  int64_t body_offset = -1;
+  uint32_t header_size = 0;
+  uint32_t code_size = 0;
+  uint32_t flags = 0;
+  uint32_t max_stack = 0;
+  uint32_t local_var_sig_tok = 0;
+  bool tiny = false;
+  bool fat = false;
+
+  yr_set_integer(
+      method_rva, out_obj, "classes[%i].methods[%i].rva", class_idx, method_idx);
+  yr_set_integer(0, out_obj, "classes[%i].methods[%i].has_body", class_idx, method_idx);
+  yr_set_integer(0, out_obj, "classes[%i].methods[%i].is_tiny", class_idx, method_idx);
+  yr_set_integer(0, out_obj, "classes[%i].methods[%i].is_fat", class_idx, method_idx);
+  yr_set_integer(
+      0, out_obj, "classes[%i].methods[%i].number_of_instructions", class_idx, method_idx);
+  yr_set_integer(
+      0, out_obj, "classes[%i].methods[%i].instruction_count", class_idx, method_idx);
+  yr_set_integer(
+      0, out_obj, "classes[%i].methods[%i].number_of_opcodes", class_idx, method_idx);
+  yr_set_integer(
+      0,
+      out_obj,
+      "classes[%i].methods[%i].number_of_exception_handlers",
+      class_idx,
+      method_idx);
+  yr_set_integer(
+      0,
+      out_obj,
+      "classes[%i].methods[%i].exception_handler_count",
+      class_idx,
+      method_idx);
+  yr_set_integer(
+      0,
+      out_obj,
+      "classes[%i].methods[%i].number_of_exception_regions",
+      class_idx,
+      method_idx);
+  yr_set_string("none", out_obj, "classes[%i].methods[%i].format", class_idx, method_idx);
+
+  if (method_rva == 0)
+    return;
+
+  body_offset = pe_rva_to_offset(pe, method_rva);
+
+  if (!dotnet_fits_at(pe, body_offset, 1))
+    return;
+
+  const uint8_t* body = pe->data + body_offset;
+
+  if ((body[0] & DOTNET_METHOD_FORMAT_MASK) == DOTNET_METHOD_TINY_FORMAT)
+  {
+    tiny = true;
+    flags = DOTNET_METHOD_TINY_FORMAT;
+    header_size = 1;
+    code_size = body[0] >> 2;
+    max_stack = 8;
+  }
+  else if ((body[0] & DOTNET_METHOD_FORMAT_MASK) == DOTNET_METHOD_FAT_FORMAT)
+  {
+    fat = true;
+
+    if (!dotnet_fits_at(pe, body_offset, 12))
+      return;
+
+    uint16_t flags_and_size = yr_le16toh(yr_unaligned_u16(body));
+    header_size = (flags_and_size >> 12) * 4;
+    flags = flags_and_size & 0x0fff;
+
+    if (header_size < 12 || !dotnet_fits_at(pe, body_offset, header_size))
+      return;
+
+    max_stack = yr_le16toh(yr_unaligned_u16(body + 2));
+    code_size = yr_le32toh(yr_unaligned_u32(body + 4));
+    local_var_sig_tok = yr_le32toh(yr_unaligned_u32(body + 8));
+  }
+  else
+  {
+    return;
+  }
+
+  if (!dotnet_fits_at(pe, body_offset + header_size, code_size))
+    return;
+
+  yr_set_integer(1, out_obj, "classes[%i].methods[%i].has_body", class_idx, method_idx);
+  yr_set_integer(tiny, out_obj, "classes[%i].methods[%i].is_tiny", class_idx, method_idx);
+  yr_set_integer(fat, out_obj, "classes[%i].methods[%i].is_fat", class_idx, method_idx);
+  const char* format = tiny ? "tiny" : "fat";
+  yr_set_string(format, out_obj, "classes[%i].methods[%i].format", class_idx, method_idx);
+  yr_set_integer(body_offset, out_obj, "classes[%i].methods[%i].offset", class_idx, method_idx);
+  yr_set_integer(header_size, out_obj, "classes[%i].methods[%i].header_size", class_idx, method_idx);
+  yr_set_integer(
+      body_offset + header_size,
+      out_obj,
+      "classes[%i].methods[%i].code_offset",
+      class_idx,
+      method_idx);
+  yr_set_integer(code_size, out_obj, "classes[%i].methods[%i].code_size", class_idx, method_idx);
+  yr_set_integer(max_stack, out_obj, "classes[%i].methods[%i].max_stack", class_idx, method_idx);
+  yr_set_integer(
+      local_var_sig_tok,
+      out_obj,
+      "classes[%i].methods[%i].local_var_sig_tok",
+      class_idx,
+      method_idx);
+  yr_set_integer(
+      local_var_sig_tok,
+      out_obj,
+      "classes[%i].methods[%i].local_var_sig_token",
+      class_idx,
+      method_idx);
+  yr_set_integer(flags, out_obj, "classes[%i].methods[%i].flags", class_idx, method_idx);
+  yr_set_integer(
+      (flags & DOTNET_METHOD_INIT_LOCALS) != 0,
+      out_obj,
+      "classes[%i].methods[%i].init_locals",
+      class_idx,
+      method_idx);
+  yr_set_integer(
+      header_size + code_size,
+      out_obj,
+      "classes[%i].methods[%i].body_size",
+      class_idx,
+      method_idx);
+  yr_set_integer(
+      header_size + code_size,
+      out_obj,
+      "classes[%i].methods[%i].size",
+      class_idx,
+      method_idx);
+
+  const uint8_t* code = body + header_size;
+  uint32_t il_offset = 0;
+  uint32_t instruction_count = 0;
+
+  while (il_offset < code_size &&
+         instruction_count < DOTNET_MAX_IL_INSTRUCTIONS)
+  {
+    uint32_t remaining = code_size - il_offset;
+    uint8_t first = code[il_offset];
+    uint16_t opcode_value = first;
+    uint32_t opcode_size = 1;
+
+    if (first == 0xFE)
+    {
+      if (remaining < 2)
+        break;
+
+      opcode_value = 0xFE00 | code[il_offset + 1];
+      opcode_size = 2;
+    }
+
+    const DOTNET_OPCODE* opcode = dotnet_lookup_opcode(opcode_value);
+
+    if (opcode == NULL)
+      break;
+
+    uint32_t operand_size = dotnet_operand_size(opcode);
+    uint32_t switch_count = 0;
+    int64_t operand = 0;
+
+    if (opcode->operand_type == DOTNET_OPERAND_SWITCH)
+    {
+      if (remaining < opcode_size + 4)
+        break;
+
+      switch_count = yr_le32toh(
+          yr_unaligned_u32(code + il_offset + opcode_size));
+
+      if (switch_count > (remaining - opcode_size - 4) / 4)
+        break;
+
+      operand_size = 4 + switch_count * 4;
+      operand = switch_count;
+    }
+
+    uint32_t instruction_size = opcode_size + operand_size;
+
+    if (instruction_size > remaining)
+      break;
+
+    const uint8_t* operand_data = code + il_offset + opcode_size;
+
+    switch (opcode->operand_type)
+    {
+    case DOTNET_OPERAND_I1:
+    case DOTNET_OPERAND_SHORT_VAR:
+      operand = *operand_data;
+      break;
+    case DOTNET_OPERAND_SHORT_BRANCH:
+      operand = (int8_t) *operand_data;
+      break;
+    case DOTNET_OPERAND_I4:
+    case DOTNET_OPERAND_R4:
+    case DOTNET_OPERAND_METHOD:
+    case DOTNET_OPERAND_FIELD:
+    case DOTNET_OPERAND_TYPE:
+    case DOTNET_OPERAND_STRING:
+    case DOTNET_OPERAND_TOKEN:
+    case DOTNET_OPERAND_SIG:
+      operand = yr_le32toh(yr_unaligned_u32(operand_data));
+      break;
+    case DOTNET_OPERAND_BRANCH:
+      operand = (int32_t) yr_le32toh(yr_unaligned_u32(operand_data));
+      break;
+    case DOTNET_OPERAND_VAR:
+      operand = yr_le16toh(yr_unaligned_u16(operand_data));
+      break;
+    case DOTNET_OPERAND_I8:
+    case DOTNET_OPERAND_R8:
+      operand = (int64_t) yr_le64toh(yr_unaligned_u64(operand_data));
+      break;
+    default:
+      break;
+    }
+
+    yr_set_integer(
+        il_offset,
+        out_obj,
+        "classes[%i].methods[%i].instructions[%i].offset",
+        class_idx,
+        method_idx,
+        instruction_count);
+    yr_set_integer(
+        il_offset,
+        out_obj,
+        "classes[%i].methods[%i].instructions[%i].il_offset",
+        class_idx,
+        method_idx,
+        instruction_count);
+    yr_set_integer(
+        body_offset + header_size + il_offset,
+        out_obj,
+        "classes[%i].methods[%i].instructions[%i].file_offset",
+        class_idx,
+        method_idx,
+        instruction_count);
+    yr_set_integer(
+        method_rva + header_size + il_offset,
+        out_obj,
+        "classes[%i].methods[%i].instructions[%i].rva",
+        class_idx,
+        method_idx,
+        instruction_count);
+    yr_set_integer(
+        method_rva + header_size + il_offset,
+        out_obj,
+        "classes[%i].methods[%i].instructions[%i].address",
+        class_idx,
+        method_idx,
+        instruction_count);
+    yr_set_integer(
+        opcode_value,
+        out_obj,
+        "classes[%i].methods[%i].instructions[%i].opcode",
+        class_idx,
+        method_idx,
+        instruction_count);
+    yr_set_integer(
+        opcode_size,
+        out_obj,
+        "classes[%i].methods[%i].instructions[%i].opcode_size",
+        class_idx,
+        method_idx,
+        instruction_count);
+    yr_set_string(
+        opcode->name,
+        out_obj,
+        "classes[%i].methods[%i].instructions[%i].opcode_name",
+        class_idx,
+        method_idx,
+        instruction_count);
+    yr_set_string(
+        opcode->name,
+        out_obj,
+        "classes[%i].methods[%i].instructions[%i].mnemonic",
+        class_idx,
+        method_idx,
+        instruction_count);
+    yr_set_string(
+        opcode->name,
+        out_obj,
+        "classes[%i].methods[%i].instructions[%i].name",
+        class_idx,
+        method_idx,
+        instruction_count);
+    yr_set_integer(
+        operand,
+        out_obj,
+        "classes[%i].methods[%i].instructions[%i].operand",
+        class_idx,
+        method_idx,
+        instruction_count);
+    yr_set_integer(
+        operand_size,
+        out_obj,
+        "classes[%i].methods[%i].instructions[%i].operand_size",
+        class_idx,
+        method_idx,
+        instruction_count);
+    yr_set_integer(
+        instruction_size,
+        out_obj,
+        "classes[%i].methods[%i].instructions[%i].size",
+        class_idx,
+        method_idx,
+        instruction_count);
+
+    if (opcode->operand_type == DOTNET_OPERAND_BRANCH ||
+        opcode->operand_type == DOTNET_OPERAND_SHORT_BRANCH)
+    {
+      yr_set_integer(
+          (int64_t) il_offset + instruction_size + operand,
+          out_obj,
+          "classes[%i].methods[%i].instructions[%i].branch_target",
+          class_idx,
+          method_idx,
+          instruction_count);
+    }
+
+    yr_set_integer(
+        switch_count,
+        out_obj,
+        "classes[%i].methods[%i].instructions[%i].number_of_switch_targets",
+        class_idx,
+        method_idx,
+        instruction_count);
+
+    for (uint32_t i = 0; i < switch_count; i++)
+    {
+      int32_t target = (int32_t) yr_le32toh(yr_unaligned_u32(
+          operand_data + 4 + i * 4));
+
+      yr_set_integer(
+          (int64_t) il_offset + instruction_size + target,
+          out_obj,
+          "classes[%i].methods[%i].instructions[%i].switch_targets[%i]",
+          class_idx,
+          method_idx,
+          instruction_count,
+          i);
+    }
+
+    yr_set_integer(
+        opcode_value,
+        out_obj,
+        "classes[%i].methods[%i].opcodes[%i]",
+        class_idx,
+        method_idx,
+        instruction_count);
+
+    il_offset += instruction_size;
+    instruction_count++;
+  }
+
+  yr_set_integer(
+      instruction_count,
+      out_obj,
+      "classes[%i].methods[%i].number_of_instructions",
+      class_idx,
+      method_idx);
+  yr_set_integer(
+      instruction_count,
+      out_obj,
+      "classes[%i].methods[%i].instruction_count",
+      class_idx,
+      method_idx);
+  yr_set_integer(
+      instruction_count,
+      out_obj,
+      "classes[%i].methods[%i].number_of_opcodes",
+      class_idx,
+      method_idx);
+
+  uint32_t handler_count = dotnet_parse_exception_sections(
+      pe,
+      out_obj,
+      class_idx,
+      method_idx,
+      body_offset,
+      header_size,
+      code_size,
+      flags);
+
+  yr_set_integer(
+      handler_count,
+      out_obj,
+      "classes[%i].methods[%i].number_of_exception_handlers",
+      class_idx,
+      method_idx);
+  yr_set_integer(
+      handler_count,
+      out_obj,
+      "classes[%i].methods[%i].exception_handler_count",
+      class_idx,
+      method_idx);
+  yr_set_integer(
+      handler_count,
+      out_obj,
+      "classes[%i].methods[%i].number_of_exception_regions",
+      class_idx,
+      method_idx);
+}
+
 static void parse_methods(
     const CLASS_CONTEXT* ctx,
     uint32_t methodlist,
@@ -1421,6 +2386,8 @@ static void parse_methods(
 
     if (!result)
       goto clean_next;
+
+    dotnet_parse_method_body(ctx->pe, row.Rva, class_idx, out_idx);
 
     const char* visibility = get_method_visibility(row.Flags);
     uint32_t stat = (row.Flags & METHOD_ATTR_STATIC) != 0;
@@ -2829,7 +3796,7 @@ void dotnet_parse_tilde_2(
             yr_le16toh(assemblyref_table->MajorVersion),
             pe->object,
             "assembly_refs[%i].version.major",
-            i);
+            (int) i);
         yr_set_integer(
             yr_le16toh(assemblyref_table->MinorVersion),
             pe->object,
@@ -3382,6 +4349,489 @@ void dotnet_parse_com(PE* pe)
     dotnet_parse_us(pe, metadata_root, headers.us);
 }
 
+typedef enum
+{
+  DOTNET_PATTERN_OPCODE = 0,
+  DOTNET_PATTERN_ANY,
+  DOTNET_PATTERN_GAP
+} DOTNET_PATTERN_TYPE;
+
+typedef struct
+{
+  uint16_t opcode;
+  DOTNET_PATTERN_TYPE type;
+} DOTNET_PATTERN;
+
+static bool dotnet_name_equals(const char* name, const char* token, size_t len)
+{
+  size_t name_len = strlen(name);
+
+  if (name_len != len)
+    return false;
+
+  for (size_t i = 0; i < len; i++)
+  {
+    if (tolower((unsigned char) name[i]) != tolower((unsigned char) token[i]))
+      return false;
+  }
+
+  return true;
+}
+
+static bool dotnet_parse_opcode_token(
+    const char* token,
+    size_t len,
+    uint16_t* opcode)
+{
+  char buffer[64];
+
+  if (len == 0 || len >= sizeof(buffer))
+    return false;
+
+  memcpy(buffer, token, len);
+  buffer[len] = '\0';
+
+  if (isdigit((unsigned char) buffer[0]) ||
+      (buffer[0] == '0' && len > 1 &&
+       (buffer[1] == 'x' || buffer[1] == 'X')))
+  {
+    char* end = NULL;
+    int base = (buffer[0] == '0' && len > 1 &&
+                (buffer[1] == 'x' || buffer[1] == 'X'))
+                   ? 16
+                   : 10;
+    unsigned long value = strtoul(buffer, &end, base);
+
+    if (end == buffer || *end != '\0' || value > 0xffff)
+      return false;
+
+    *opcode = (uint16_t) value;
+    return true;
+  }
+
+  for (size_t i = 0; i < sizeof(dotnet_opcodes) / sizeof(dotnet_opcodes[0]); i++)
+  {
+    if (dotnet_name_equals(dotnet_opcodes[i].name, token, len))
+    {
+      *opcode = dotnet_opcodes[i].opcode;
+      return true;
+    }
+  }
+
+  return false;
+}
+
+static bool dotnet_parse_opcode_pattern(
+    const SIZED_STRING* pattern,
+    DOTNET_PATTERN* result,
+    uint32_t* result_len)
+{
+  const char* text = pattern->c_string;
+  size_t len = pattern->length;
+  size_t offset = 0;
+  uint32_t count = 0;
+
+  while (offset < len)
+  {
+    while (offset < len &&
+           (isspace((unsigned char) text[offset]) || text[offset] == ','))
+      offset++;
+
+    if (offset >= len)
+      break;
+
+    size_t start = offset;
+
+    while (offset < len && !isspace((unsigned char) text[offset]) &&
+           text[offset] != ',')
+      offset++;
+
+    size_t token_len = offset - start;
+    const char* token = text + start;
+
+    if (count >= DOTNET_MAX_PATTERN_TOKENS)
+      return false;
+
+    if ((token_len == 1 && token[0] == '?') ||
+        (token_len == 2 && token[0] == '?' && token[1] == '?'))
+    {
+      result[count].type = DOTNET_PATTERN_ANY;
+      result[count].opcode = 0;
+    }
+    else if ((token_len == 1 && token[0] == '*') ||
+             (token_len == 3 && token[0] == '.' && token[1] == '.' &&
+              token[2] == '.'))
+    {
+      result[count].type = DOTNET_PATTERN_GAP;
+      result[count].opcode = 0;
+    }
+    else
+    {
+      result[count].type = DOTNET_PATTERN_OPCODE;
+
+      if (!dotnet_parse_opcode_token(token, token_len, &result[count].opcode))
+        return false;
+    }
+
+    count++;
+  }
+
+  *result_len = count;
+  return count > 0;
+}
+
+static bool dotnet_match_from(
+    const uint16_t* opcodes,
+    uint32_t opcode_count,
+    const DOTNET_PATTERN* pattern,
+    uint32_t pattern_count)
+{
+  uint32_t i = 0;
+  uint32_t j = 0;
+  int64_t gap_pattern = -1;
+  uint32_t gap_opcode = 0;
+
+  while (i < opcode_count)
+  {
+    if (j == pattern_count)
+      return true;
+
+    if (j < pattern_count &&
+        (pattern[j].type == DOTNET_PATTERN_ANY ||
+         (pattern[j].type == DOTNET_PATTERN_OPCODE &&
+          pattern[j].opcode == opcodes[i])))
+    {
+      i++;
+      j++;
+    }
+    else if (j < pattern_count && pattern[j].type == DOTNET_PATTERN_GAP)
+    {
+      gap_pattern = j++;
+      gap_opcode = i;
+    }
+    else if (gap_pattern >= 0)
+    {
+      j = (uint32_t) gap_pattern + 1;
+      i = ++gap_opcode;
+    }
+    else
+    {
+      return false;
+    }
+  }
+
+  while (j < pattern_count && pattern[j].type == DOTNET_PATTERN_GAP)
+    j++;
+
+  return j == pattern_count;
+}
+
+static bool dotnet_match_sequence(
+    const uint16_t* opcodes,
+    uint32_t opcode_count,
+    const DOTNET_PATTERN* pattern,
+    uint32_t pattern_count)
+{
+  if (pattern_count == 0)
+    return false;
+
+  if (opcode_count == 0)
+  {
+    for (uint32_t i = 0; i < pattern_count; i++)
+    {
+      if (pattern[i].type != DOTNET_PATTERN_GAP)
+        return false;
+    }
+
+    return true;
+  }
+
+  for (uint32_t start = 0; start < opcode_count; start++)
+  {
+    if (dotnet_match_from(
+            opcodes + start, opcode_count - start, pattern, pattern_count))
+      return true;
+  }
+
+  return false;
+}
+
+static bool dotnet_sized_string_equals(
+    const SIZED_STRING* value,
+    const char* text,
+    size_t len)
+{
+  return value != NULL && value->length == len &&
+         memcmp(value->c_string, text, len) == 0;
+}
+
+static bool dotnet_method_selected(
+    YR_OBJECT* module,
+    int class_idx,
+    int method_idx,
+    const SIZED_STRING* selector)
+{
+  if (selector == NULL || selector->length == 0)
+    return true;
+
+  SIZED_STRING* method_name = yr_get_string(
+      module,
+      "classes[%i].methods[%i].name",
+      class_idx,
+      method_idx);
+
+  if (method_name == NULL)
+    return false;
+
+  const char* text = selector->c_string;
+  size_t len = selector->length;
+  const char* separator = NULL;
+  size_t separator_len = 0;
+
+  for (size_t i = 0; i + 1 < len; i++)
+  {
+    if (text[i] == ':' && text[i + 1] == ':')
+    {
+      separator = text + i;
+      separator_len = 2;
+      break;
+    }
+  }
+
+  if (separator == NULL && len > 1 && text[0] != '.')
+  {
+    for (size_t i = len; i > 0; i--)
+    {
+      if (text[i - 1] == '.')
+      {
+        separator = text + i - 1;
+        separator_len = 1;
+        break;
+      }
+    }
+  }
+
+  if (separator == NULL)
+    return dotnet_sized_string_equals(method_name, text, len);
+
+  size_t class_len = separator - text;
+  size_t method_offset = class_len + separator_len;
+
+  if (method_offset >= len)
+    return false;
+
+  if (!dotnet_sized_string_equals(
+          method_name, text + method_offset, len - method_offset))
+    return false;
+
+  SIZED_STRING* class_name = yr_get_string(
+      module, "classes[%i].fullname", class_idx);
+
+  return dotnet_sized_string_equals(class_name, text, class_len);
+}
+
+static bool dotnet_sequence_in_module(
+    YR_OBJECT* module,
+    const SIZED_STRING* selector,
+    int class_index,
+    int method_index,
+    const DOTNET_PATTERN* pattern,
+    uint32_t pattern_count)
+{
+  int64_t class_count = yr_get_integer(module, "number_of_classes");
+
+  if (class_count <= 0)
+    return false;
+
+  int class_start = class_index < 0 ? 0 : class_index;
+  int class_end = class_index < 0 ? (int) class_count : class_index + 1;
+
+  if (class_start >= class_count)
+    return false;
+
+  for (int class_idx = class_start; class_idx < class_end; class_idx++)
+  {
+    int64_t method_count = yr_get_integer(
+        module, "classes[%i].number_of_methods", class_idx);
+
+    if (method_count <= 0)
+      continue;
+
+    int method_start = method_index < 0 ? 0 : method_index;
+    int method_end = method_index < 0 ? (int) method_count : method_index + 1;
+
+    if (method_start >= method_count)
+      continue;
+
+    for (int method_idx = method_start; method_idx < method_end; method_idx++)
+    {
+      if (selector != NULL &&
+          !dotnet_method_selected(module, class_idx, method_idx, selector))
+        continue;
+
+      int64_t opcode_count = yr_get_integer(
+          module,
+          "classes[%i].methods[%i].number_of_opcodes",
+          class_idx,
+          method_idx);
+
+      if (opcode_count <= 0 ||
+          opcode_count > DOTNET_MAX_IL_INSTRUCTIONS)
+        continue;
+
+      uint16_t* opcodes = (uint16_t*) yr_malloc(
+          (size_t) opcode_count * sizeof(uint16_t));
+
+      if (opcodes == NULL)
+        return false;
+
+      for (int64_t i = 0; i < opcode_count; i++)
+      {
+        opcodes[i] = (uint16_t) yr_get_integer(
+            module,
+            "classes[%i].methods[%i].opcodes[%i]",
+            class_idx,
+            method_idx,
+            (int) i);
+      }
+
+      bool match = dotnet_match_sequence(
+          opcodes, (uint32_t) opcode_count, pattern, pattern_count);
+
+      yr_free(opcodes);
+
+      if (match)
+        return true;
+    }
+  }
+
+  return false;
+}
+
+define_function(dotnet_fn_opcode_sequence)
+{
+  SIZED_STRING* pattern_text = sized_string_argument(1);
+  DOTNET_PATTERN pattern[DOTNET_MAX_PATTERN_TOKENS];
+  uint32_t pattern_count = 0;
+
+  if (!dotnet_parse_opcode_pattern(
+          pattern_text, pattern, &pattern_count))
+    return_integer(0);
+
+  return_integer(dotnet_sequence_in_module(
+      yr_module(), NULL, -1, -1, pattern, pattern_count));
+}
+
+define_function(dotnet_fn_opcode_sequence_method)
+{
+  SIZED_STRING* selector = sized_string_argument(1);
+  SIZED_STRING* pattern_text = sized_string_argument(2);
+  DOTNET_PATTERN pattern[DOTNET_MAX_PATTERN_TOKENS];
+  uint32_t pattern_count = 0;
+
+  if (!dotnet_parse_opcode_pattern(
+          pattern_text, pattern, &pattern_count))
+    return_integer(0);
+
+  return_integer(dotnet_sequence_in_module(
+      yr_module(), selector, -1, -1, pattern, pattern_count));
+}
+
+define_function(dotnet_fn_opcode_sequence_indexed)
+{
+  int64_t class_index = integer_argument(1);
+  int64_t method_index = integer_argument(2);
+  SIZED_STRING* pattern_text = sized_string_argument(3);
+  DOTNET_PATTERN pattern[DOTNET_MAX_PATTERN_TOKENS];
+  uint32_t pattern_count = 0;
+
+  if (class_index < 0 || method_index < 0 ||
+      !dotnet_parse_opcode_pattern(
+          pattern_text, pattern, &pattern_count))
+    return_integer(0);
+
+  return_integer(dotnet_sequence_in_module(
+      yr_module(),
+      NULL,
+      (int) class_index,
+      (int) method_index,
+      pattern,
+      pattern_count));
+}
+
+static bool dotnet_numeric_opcode_sequence(
+    YR_VALUE* args,
+    YR_OBJECT_FUNCTION* function_obj,
+    int argument_count)
+{
+  DOTNET_PATTERN pattern[8];
+
+  for (int i = 0; i < argument_count; i++)
+  {
+    if (args[i].i < 0 || args[i].i > 0xffff)
+      return false;
+
+    pattern[i].type = DOTNET_PATTERN_OPCODE;
+    pattern[i].opcode = (uint16_t) args[i].i;
+  }
+
+  return dotnet_sequence_in_module(
+      yr_object_get_root((YR_OBJECT*) function_obj),
+      NULL,
+      -1,
+      -1,
+      pattern,
+      (uint32_t) argument_count);
+}
+
+define_function(dotnet_fn_opcode_sequence_1)
+{
+  return_integer(
+      dotnet_numeric_opcode_sequence(__args, __function_obj, 1) ? 1 : 0);
+}
+
+define_function(dotnet_fn_opcode_sequence_2)
+{
+  return_integer(
+      dotnet_numeric_opcode_sequence(__args, __function_obj, 2) ? 1 : 0);
+}
+
+define_function(dotnet_fn_opcode_sequence_3)
+{
+  return_integer(
+      dotnet_numeric_opcode_sequence(__args, __function_obj, 3) ? 1 : 0);
+}
+
+define_function(dotnet_fn_opcode_sequence_4)
+{
+  return_integer(
+      dotnet_numeric_opcode_sequence(__args, __function_obj, 4) ? 1 : 0);
+}
+
+define_function(dotnet_fn_opcode_sequence_5)
+{
+  return_integer(
+      dotnet_numeric_opcode_sequence(__args, __function_obj, 5) ? 1 : 0);
+}
+
+define_function(dotnet_fn_opcode_sequence_6)
+{
+  return_integer(
+      dotnet_numeric_opcode_sequence(__args, __function_obj, 6) ? 1 : 0);
+}
+
+define_function(dotnet_fn_opcode_sequence_7)
+{
+  return_integer(
+      dotnet_numeric_opcode_sequence(__args, __function_obj, 7) ? 1 : 0);
+}
+
+define_function(dotnet_fn_opcode_sequence_8)
+{
+  return_integer(
+      dotnet_numeric_opcode_sequence(__args, __function_obj, 8) ? 1 : 0);
+}
+
 begin_declarations
   declare_integer("is_dotnet");
   declare_string("version");
@@ -3441,6 +4891,92 @@ begin_declarations
       declare_integer("static");
       declare_string("visibility");
       declare_string("name");
+
+      declare_integer("has_body");
+      declare_integer("is_tiny");
+      declare_integer("is_fat");
+      declare_string("format");
+      declare_integer("rva");
+      declare_integer("offset");
+      declare_integer("body_size");
+      declare_integer("size");
+      declare_integer("header_size");
+      declare_integer("code_offset");
+      declare_integer("code_size");
+      declare_integer("max_stack");
+      declare_integer("local_var_sig_tok");
+      declare_integer("local_var_sig_token");
+      declare_integer("flags");
+      declare_integer("init_locals");
+
+      declare_integer("number_of_instructions");
+      declare_integer("instruction_count");
+      begin_struct_array("instructions")
+        declare_integer("offset");
+        declare_integer("il_offset");
+        declare_integer("file_offset");
+        declare_integer("rva");
+        declare_integer("address");
+        declare_integer("opcode");
+        declare_integer("opcode_size");
+        declare_string("opcode_name");
+        declare_string("mnemonic");
+        declare_string("name");
+        declare_integer("operand");
+        declare_integer("operand_size");
+        declare_integer("size");
+        declare_integer("branch_target");
+        declare_integer("number_of_switch_targets");
+        declare_integer_array("switch_targets");
+      end_struct_array("instructions")
+
+      declare_integer("number_of_opcodes");
+      declare_integer_array("opcodes");
+
+      declare_integer("number_of_exception_handlers");
+      declare_integer("exception_handler_count");
+      begin_struct_array("exception_handlers")
+        declare_integer("offset");
+        declare_integer("flags");
+        declare_string("type");
+        declare_string("handler_type");
+        declare_integer("try_offset");
+        declare_integer("try_start");
+        declare_integer("try_length");
+        declare_integer("try_end");
+        declare_integer("handler_offset");
+        declare_integer("handler_start");
+        declare_integer("handler_length");
+        declare_integer("handler_end");
+        declare_integer("class_token");
+        declare_integer("catch_type");
+        declare_integer("catch_type_token");
+        declare_integer("filter_offset");
+        declare_integer("filter_start");
+        declare_integer("exception_type");
+      end_struct_array("exception_handlers")
+
+      declare_integer("number_of_exception_regions");
+      begin_struct_array("exception_regions")
+        declare_integer("offset");
+        declare_integer("flags");
+        declare_string("type");
+        declare_string("handler_type");
+        declare_integer("try_offset");
+        declare_integer("try_start");
+        declare_integer("try_length");
+        declare_integer("try_end");
+        declare_integer("handler_offset");
+        declare_integer("handler_start");
+        declare_integer("handler_length");
+        declare_integer("handler_end");
+        declare_integer("class_token");
+        declare_integer("catch_type");
+        declare_integer("catch_type_token");
+        declare_integer("filter_offset");
+        declare_integer("filter_start");
+        declare_integer("exception_type");
+      end_struct_array("exception_regions")
     end_struct_array("methods")
 
   end_struct_array("classes")
@@ -3481,6 +5017,36 @@ begin_declarations
 
   declare_integer_array("field_offsets");
   declare_integer("number_of_field_offsets");
+
+  declare_function("opcode_sequence", "s", "i", dotnet_fn_opcode_sequence);
+  declare_function(
+      "opcode_sequence", "ss", "i", dotnet_fn_opcode_sequence_method);
+  declare_function(
+      "opcode_sequence", "iis", "i", dotnet_fn_opcode_sequence_indexed);
+  declare_function("opcode_sequence", "i", "i", dotnet_fn_opcode_sequence_1);
+  declare_function("opcode_sequence", "ii", "i", dotnet_fn_opcode_sequence_2);
+  declare_function("opcode_sequence", "iii", "i", dotnet_fn_opcode_sequence_3);
+  declare_function(
+      "opcode_sequence", "iiii", "i", dotnet_fn_opcode_sequence_4);
+  declare_function(
+      "opcode_sequence", "iiiii", "i", dotnet_fn_opcode_sequence_5);
+  declare_function(
+      "opcode_sequence", "iiiiii", "i", dotnet_fn_opcode_sequence_6);
+  declare_function(
+      "opcode_sequence", "iiiiiii", "i", dotnet_fn_opcode_sequence_7);
+  declare_function(
+      "opcode_sequence", "iiiiiiii", "i", dotnet_fn_opcode_sequence_8);
+
+  declare_function(
+      "il_opcode_sequence", "s", "i", dotnet_fn_opcode_sequence);
+  declare_function(
+      "il_opcode_sequence", "ss", "i", dotnet_fn_opcode_sequence_method);
+  declare_function(
+      "il_opcode_sequence", "iis", "i", dotnet_fn_opcode_sequence_indexed);
+  declare_function(
+      "il_opcode_sequence", "ii", "i", dotnet_fn_opcode_sequence_2);
+  declare_function(
+      "il_opcode_sequence", "iii", "i", dotnet_fn_opcode_sequence_3);
 end_declarations
 
 int module_initialize(YR_MODULE* module)

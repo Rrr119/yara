@@ -180,7 +180,163 @@ Reference
         .. c:member:: generic_parameters
             A zero-based array of method generic parameters. Individual parameters can be accessed by using the [] operator.
 
+        .. c:member:: has_body
+            Boolean indicating whether the method has a readable Common
+            Intermediate Language (CIL) method body.
+
+        .. c:member:: is_tiny
+            Boolean indicating whether the method body uses the tiny header
+            format.
+
+        .. c:member:: is_fat
+            Boolean indicating whether the method body uses the fat header
+            format.
+
+        .. c:member:: format
+            Method body format: ``tiny``, ``fat``, or ``none``.
+
+        .. c:member:: rva
+            Relative virtual address of the method body.
+
+        .. c:member:: offset
+            File offset of the method body.
+
+        .. c:member:: header_size
+            Size in bytes of the method body header.
+
+        .. c:member:: code_offset
+            File offset of the first IL instruction.
+
+        .. c:member:: code_size
+            Size in bytes of the IL instruction stream.
+
+        .. c:member:: body_size
+            Total size of the method body, including the header, IL stream,
+            and exception sections.
+
+        .. c:member:: max_stack
+            Maximum evaluation stack depth declared by the method body.
+
+        .. c:member:: local_var_sig_tok
+            Metadata token of the local variable signature, or zero when the
+            method has no local variables.
+
+        .. c:member:: flags
+            Raw method body header flags.
+
+        .. c:member:: init_locals
+            Boolean indicating whether local variables must be initialized.
+
+        .. c:member:: number_of_instructions
+            Number of decoded IL instructions.
+
+        .. c:member:: instructions
+            A zero-based array of IL instruction objects. Individual
+            instructions can be accessed using the [] operator.
+
+            .. c:member:: offset
+                IL offset relative to the start of the instruction stream.
+
+            .. c:member:: file_offset
+                File offset of the instruction.
+
+            .. c:member:: rva
+                Relative virtual address of the instruction.
+
+            .. c:member:: opcode
+                Numeric opcode. One-byte opcodes use their ECMA-335 value;
+                two-byte opcodes include the ``0xFE`` prefix, for example
+                ``0xFE01`` for ``ceq``.
+
+            .. c:member:: opcode_size
+                Size of the opcode in bytes (1 or 2).
+
+            .. c:member:: opcode_name
+                Instruction mnemonic, for example ``callvirt``.
+
+            .. c:member:: mnemonic
+                Alias for ``opcode_name``.
+
+            .. c:member:: operand
+                Decoded operand. Metadata tokens, variable indexes, branch
+                displacements, and integer constants are represented as
+                integers. For ``switch`` this is the number of targets.
+
+            .. c:member:: operand_size
+                Size of the operand in bytes.
+
+            .. c:member:: size
+                Total instruction size in bytes, including the opcode and
+                operand.
+
+            .. c:member:: branch_target
+                For branch instructions, the target IL offset. This member is
+                only defined for branch opcodes.
+
+            .. c:member:: number_of_switch_targets
+                For ``switch`` instructions, the number of branch targets.
+
+            .. c:member:: switch_targets
+                For ``switch`` instructions, a zero-based array of target IL
+                offsets.
+
+        .. c:member:: number_of_opcodes
+            Number of opcodes in the method body. This is the same as
+            ``number_of_instructions``.
+
+        .. c:member:: opcodes
+            A zero-based integer array containing only the numeric opcodes of
+            the method, without operands.
+
+        .. c:member:: number_of_exception_handlers
+            Number of exception handlers in the method body.
+
+        .. c:member:: exception_handlers
+            A zero-based array of exception handler objects. Individual
+            handlers can be accessed using the [] operator.
+
+            .. c:member:: type
+                Handler type: ``catch``, ``filter``, ``finally``, ``fault``,
+                or ``unknown``.
+
+            .. c:member:: flags
+                Raw exception clause flags.
+
+            .. c:member:: try_offset
+                IL offset where the protected region starts.
+
+            .. c:member:: try_length
+                Length in bytes of the protected region.
+
+            .. c:member:: try_end
+                IL offset immediately after the protected region.
+
+            .. c:member:: handler_offset
+                IL offset where the handler starts.
+
+            .. c:member:: handler_length
+                Length in bytes of the handler.
+
+            .. c:member:: handler_end
+                IL offset immediately after the handler.
+
+            .. c:member:: class_token
+                Metadata token of the caught type for ``catch`` clauses, or
+                zero for other handler types.
+
+            .. c:member:: filter_offset
+                IL offset of the filter expression for ``filter`` clauses, or
+                zero for other handler types.
+
+        .. c:member:: number_of_exception_regions
+            Alias for ``number_of_exception_handlers``.
+
+        .. c:member:: exception_regions
+            Alias for ``exception_handlers``.
+
     *Example: dotnet.classes[0].fullname == "Launcher.Program"*
+
+    *Example: dotnet.classes[0].methods[0].instructions[0].opcode == 0x28*
 
 .. c:type:: number_of_resources
 
@@ -313,3 +469,48 @@ Reference
     Function returning true if the PE is indeed .NET.
 
     *Example: dotnet.is_dotnet*
+
+Functions
+---------
+
+.. c:function:: opcode_sequence(pattern)
+
+    .. versionadded:: 4.6.0
+
+    Returns true if any decoded method contains the opcode sequence described
+    by ``pattern``. Operands are ignored, so the sequence only describes
+    consecutive instruction opcodes.
+
+    ``pattern`` is a whitespace- or comma-separated list of opcodes. Each item
+    can be a mnemonic (``callvirt``), a decimal value (``111``), or a
+    hexadecimal value (``0x6F`` or ``0xFE01``). Two wildcards are supported:
+    ``?`` or ``??`` match any single opcode, and ``*`` or ``...`` match any
+    number of opcodes, including zero.
+
+    *Example: dotnet.opcode_sequence("ldarg.0, stsfld, ldarg.1, stsfld")*
+
+    *Example: dotnet.opcode_sequence("call, *, callvirt")*
+
+.. c:function:: opcode_sequence(method, pattern)
+
+    Like ``opcode_sequence(pattern)``, but only considers methods matching
+    ``method``. The selector can be a bare method name (``Initialize``),
+    ``Class::Method``, or ``Namespace.Class.Method``.
+
+    *Example: dotnet.opcode_sequence("Program::Main", "ldstr, call")*
+
+.. c:function:: opcode_sequence(class_index, method_index, pattern)
+
+    Like ``opcode_sequence(pattern)``, but only considers the method at the
+    specified indexes in the ``classes`` and ``methods`` arrays.
+
+    *Example: dotnet.opcode_sequence(0, 0, "ldarg.0, call")*
+
+.. c:function:: opcode_sequence(opcode1, opcode2, ...)
+
+    Matches an exact sequence of numeric opcodes in any method. Up to eight
+    opcodes can be supplied.
+
+    *Example: dotnet.opcode_sequence(0x28, 0x2A)*
+
+``il_opcode_sequence`` is an alias for ``opcode_sequence``.

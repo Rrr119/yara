@@ -1,0 +1,17 @@
+{
+  "root": "/home/dev/feedback/uid21950",
+  "B": "/home/dev/feedback/uid21950",
+  "sha": "6d47342e825e59f5d8f20874d0778332bcec83a6",
+  "wslDistro": "Ubuntu-26.04",
+  "source": {
+    "owner": "VirusTotal",
+    "repo": "yara",
+    "sha": "6d47342e825e59f5d8f20874d0778332bcec83a6"
+  },
+  "fork": {
+    "owner": "Rrr119",
+    "repo": "yara",
+    "cloneUrl": "https://github.com/Rrr119/yara.git"
+  },
+  "at": "2026-11-15T20:16:11.805Z"
+}

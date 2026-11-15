@@ -152,6 +152,128 @@ int main(int argc, char** argv)
       }",
       "tests/data/dotnet_misaligned_guid");
 
+  // Fat method body: Initialize, the first method of the first class.
+  assert_true_rule_file(
+      "import \"dotnet\" \
+      rule test { \
+        condition: \
+          dotnet.classes[0].methods[0].name == \"Initialize\" and \
+          dotnet.classes[0].methods[0].has_body and \
+          dotnet.classes[0].methods[0].is_fat and \
+          not dotnet.classes[0].methods[0].is_tiny and \
+          dotnet.classes[0].methods[0].format == \"fat\" and \
+          dotnet.classes[0].methods[0].rva == 0x14dabc and \
+          dotnet.classes[0].methods[0].header_size == 12 and \
+          dotnet.classes[0].methods[0].code_size == 267 and \
+          dotnet.classes[0].methods[0].max_stack == 4 and \
+          dotnet.classes[0].methods[0].flags == 0x003 and \
+          not dotnet.classes[0].methods[0].init_locals and \
+          dotnet.classes[0].methods[0].number_of_instructions == 64 and \
+          dotnet.classes[0].methods[0].number_of_opcodes == 64 and \
+          dotnet.classes[0].methods[0].instructions[0].opcode == 0x02 and \
+          dotnet.classes[0].methods[0].instructions[0].mnemonic == \"ldarg.0\" and \
+          dotnet.classes[0].methods[0].instructions[1].opcode == 0x80 and \
+          dotnet.classes[0].methods[0].instructions[1].operand == 0x04000007 and \
+          dotnet.classes[0].methods[0].instructions[6].opcode == 0x28 and \
+          dotnet.classes[0].methods[0].instructions[6].mnemonic == \"call\" and \
+          dotnet.classes[0].methods[0].instructions[6].operand == 0x0A00000F and \
+          dotnet.classes[0].methods[0].instructions[9].opcode == 0xFE01 and \
+          dotnet.classes[0].methods[0].instructions[9].opcode_name == \"ceq\" and \
+          dotnet.classes[0].methods[0].instructions[9].size == 2 and \
+          dotnet.classes[0].methods[0].opcodes[0] == 0x02 and \
+          dotnet.classes[0].methods[0].opcodes[9] == 0xFE01 \
+      }",
+      "tests/data/"
+      "756684f4017ba7e931a26724ae61606b16b5f8cc84ed38a260a34e50c5016f59");
+
+  // Tiny method body: Application_BeginQuit, method 1 of the first class.
+  assert_true_rule_file(
+      "import \"dotnet\" \
+      rule test { \
+        condition: \
+          dotnet.classes[0].methods[1].name == \"Application_BeginQuit\" and \
+          dotnet.classes[0].methods[1].has_body and \
+          dotnet.classes[0].methods[1].is_tiny and \
+          not dotnet.classes[0].methods[1].is_fat and \
+          dotnet.classes[0].methods[1].format == \"tiny\" and \
+          dotnet.classes[0].methods[1].header_size == 1 and \
+          dotnet.classes[0].methods[1].code_size == 6 and \
+          dotnet.classes[0].methods[1].max_stack == 8 and \
+          dotnet.classes[0].methods[1].body_size == 7 and \
+          dotnet.classes[0].methods[1].number_of_instructions == 2 and \
+          dotnet.classes[0].methods[1].instructions[0].opcode == 0x28 and \
+          dotnet.classes[0].methods[1].instructions[0].operand == 0x06000013 and \
+          dotnet.classes[0].methods[1].instructions[1].opcode == 0x2A and \
+          dotnet.classes[0].methods[1].instructions[1].mnemonic == \"ret\" \
+      }",
+      "tests/data/"
+      "756684f4017ba7e931a26724ae61606b16b5f8cc84ed38a260a34e50c5016f59");
+
+  // LoadMenuMacros has two finally clauses in a small exception section.
+  assert_true_rule_file(
+      "import \"dotnet\" \
+      rule test { \
+        condition: \
+          dotnet.classes[0].methods[7].name == \"LoadMenuMacros\" and \
+          dotnet.classes[0].methods[7].init_locals and \
+          dotnet.classes[0].methods[7].number_of_instructions == 57 and \
+          dotnet.classes[0].methods[7].number_of_exception_handlers == 2 and \
+          dotnet.classes[0].methods[7].number_of_exception_regions == 2 and \
+          dotnet.classes[0].methods[7].exception_handlers[0].type == \"finally\" and \
+          dotnet.classes[0].methods[7].exception_handlers[0].flags == 2 and \
+          dotnet.classes[0].methods[7].exception_handlers[0].try_offset == 73 and \
+          dotnet.classes[0].methods[7].exception_handlers[0].try_length == 46 and \
+          dotnet.classes[0].methods[7].exception_handlers[0].try_end == 119 and \
+          dotnet.classes[0].methods[7].exception_handlers[0].handler_offset == 119 and \
+          dotnet.classes[0].methods[7].exception_handlers[0].handler_length == 14 and \
+          dotnet.classes[0].methods[7].exception_handlers[0].handler_end == 133 and \
+          dotnet.classes[0].methods[7].exception_regions[1].try_offset == 25 and \
+          dotnet.classes[0].methods[7].exception_regions[1].try_length == 119 and \
+          dotnet.classes[0].methods[7].exception_regions[1].handler_offset == 144 \
+      }",
+      "tests/data/"
+      "756684f4017ba7e931a26724ae61606b16b5f8cc84ed38a260a34e50c5016f59");
+
+  // FillOpenDocuments uses a fat exception section with a catch clause.
+  assert_true_rule_file(
+      "import \"dotnet\" \
+      rule test { \
+        condition: \
+          dotnet.classes[0].methods[9].name == \"FillOpenDocuments\" and \
+          dotnet.classes[0].methods[9].number_of_exception_handlers == 3 and \
+          dotnet.classes[0].methods[9].exception_handlers[0].type == \"finally\" and \
+          dotnet.classes[0].methods[9].exception_handlers[0].try_offset == 83 and \
+          dotnet.classes[0].methods[9].exception_handlers[0].try_length == 23 and \
+          dotnet.classes[0].methods[9].exception_handlers[0].handler_offset == 106 and \
+          dotnet.classes[0].methods[9].exception_handlers[1].type == \"catch\" and \
+          dotnet.classes[0].methods[9].exception_handlers[1].class_token == 0x01000001 and \
+          dotnet.classes[0].methods[9].exception_handlers[1].try_offset == 116 and \
+          dotnet.classes[0].methods[9].exception_handlers[1].try_length == 141 and \
+          dotnet.classes[0].methods[9].exception_handlers[1].handler_offset == 257 and \
+          dotnet.classes[0].methods[9].exception_handlers[1].handler_length == 3 and \
+          dotnet.classes[0].methods[9].exception_handlers[2].type == \"finally\" and \
+          dotnet.classes[0].methods[9].exception_handlers[2].try_offset == 18 and \
+          dotnet.classes[0].methods[9].exception_handlers[2].try_length == 263 \
+      }",
+      "tests/data/"
+      "756684f4017ba7e931a26724ae61606b16b5f8cc84ed38a260a34e50c5016f59");
+
+  assert_true_rule_file(
+      "import \"dotnet\" \
+      rule test { \
+        condition: \
+          dotnet.opcode_sequence(\"ldarg.0, stsfld, ldarg.1, stsfld\") and \
+          dotnet.opcode_sequence(\"Initialize\", \"ldarg.0, stsfld, ldarg.1, stsfld\") and \
+          dotnet.opcode_sequence(0, 0, \"ldarg.0, stsfld\") and \
+          dotnet.opcode_sequence(0x28, 0x2A) and \
+          dotnet.opcode_sequence(\"Initialize\", \"ldarg.0, *, ceq\") and \
+          dotnet.il_opcode_sequence(\"0x28, 0x2A\") and \
+          not dotnet.opcode_sequence(\"Initialize\", \"ret, ret\") and \
+          not dotnet.opcode_sequence(\"NoSuchMethod\", \"*\") \
+      }",
+      "tests/data/"
+      "756684f4017ba7e931a26724ae61606b16b5f8cc84ed38a260a34e50c5016f59");
+
   yr_finalize();
 
   YR_DEBUG_FPRINTF(
